@@ -380,6 +380,26 @@ def main():
         except Exception as _imu_mass_err:
             print(f"[Physics] IMU mass-property repair failed at {_imu_sensor_path}: {_imu_mass_err}")
 
+    # The OS2 RTX LiDAR is likewise authored as a rigid body with a negative
+    # mass sentinel and no colliders.  Approximate it as a 0.40 kg cylinder
+    # (90 mm diameter, 80 mm high) so it has stable explicit properties.  This
+    # is intentionally independent of the IMU repair above.
+    for _lidar_sensor in stage.Traverse():
+        _lidar_sensor_path = _lidar_sensor.GetPath().pathString
+        if not _lidar_sensor_path.endswith("/Sensors/OS2/sensor"):
+            continue
+        try:
+            from pxr import UsdPhysics
+            _lidar_mass_api = UsdPhysics.MassAPI.Apply(_lidar_sensor)
+            _lidar_mass_api.CreateMassAttr(0.40)  # kg
+            # Solid-cylinder inertia: Ixx=Iyy≈4.16e-4, Izz≈4.05e-4 kg·m².
+            _lidar_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(4.16e-4, 4.16e-4, 4.05e-4))
+            _lidar_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
+            print(f"[Physics] Repaired OS2 LiDAR mass properties at {_lidar_sensor_path}: "
+                  "mass=0.4 kg, diagonalInertia=(0.000416, 0.000416, 0.000405) kg·m²")
+        except Exception as _lidar_mass_err:
+            print(f"[Physics] OS2 LiDAR mass-property repair failed at {_lidar_sensor_path}: {_lidar_mass_err}")
+
     # Apply PhysicsScene overrides from configuration
     physics_opts = config.get("physics_settings", {})
     if physics_opts:
