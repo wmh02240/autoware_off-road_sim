@@ -174,7 +174,7 @@ def main():
     carb_settings.set_bool("/app/stage/generateDefaultLight", False)
 
     import omni.usd
-    from pxr import UsdGeom, Gf
+    from pxr import UsdGeom, Gf, Sdf
     import omni.ext
 
     # Ensure a stage is open
@@ -257,6 +257,106 @@ def main():
             print(f"Successfully added vehicle '{veh_name}' reference to stage at '{prim_path}'")
         else:
             print(f"Warning: Vehicle asset not found at {veh_asset_path}")
+
+    # ── Vehicle USD compatibility repair: IMU fixed joint ──────────────────
+    # roboracer_max.usd contains a stale body target named ``Sensors/IMU``.
+    # The actual rigid-body prim in the asset is ``Imu_Sensor`` below the
+    # chassis base_link.  An unresolved body relationship makes PhysX discard
+    # the complete fixed joint.  Author a composed-stage override instead of
+    # changing the binary USD crate, and only replace that exact stale target.
+    # This keeps the repair safe for other vehicle assets/configurations.
+    for _imu_joint in stage.Traverse():
+        _imu_joint_path = _imu_joint.GetPath().pathString
+        if not _imu_joint_path.endswith("/Joints/IMUFixedJoint"):
+            continue
+
+        _vehicle_root = _imu_joint_path.removesuffix("/Joints/IMUFixedJoint")
+        _imu_target = Sdf.Path(
+            f"{_vehicle_root}/Rigid_Bodies/Chassis/base_link/Imu_Sensor")
+        if not stage.GetPrimAtPath(_imu_target).IsValid():
+            print(f"[Physics] IMU joint repair skipped: expected sensor prim is missing: {_imu_target}")
+            continue
+
+        _repaired_rels = []
+        for _rel in _imu_joint.GetRelationships():
+            _targets = _rel.GetTargets()
+            _new_targets = []
+            _changed = False
+            for _target in _targets:
+                # Do not rewrite arbitrary missing targets: this repair is
+                # deliberately scoped to the known obsolete IMU location.
+                if str(_target).endswith("/Sensors/IMU"):
+                    _new_targets.append(_imu_target)
+                    _changed = True
+                else:
+                    _new_targets.append(_target)
+            if _changed:
+                _rel.SetTargets(_new_targets)
+                _repaired_rels.append(_rel.GetName())
+
+        if _repaired_rels:
+            print(f"[Physics] Repaired IMUFixedJoint at {_imu_joint_path}: "
+                  f"{', '.join(_repaired_rels)} -> {_imu_target}")
+
+    # The source vehicle USD has one suspension joint whose two authored local
+    # frames resolve to different world-space frames.  PhysX consequently snaps
+    # the connected parts together when play begins.  Preserve body0's authored
+    # anchor and derive body1's local frame from it, before PhysX consumes USD.
+    for _susp_joint in stage.Traverse():
+        _susp_path = _susp_joint.GetPath().pathString
+        if not _susp_path.endswith("/Joints/Chassis__Arm_Rear_Upper_Right"):
+            continue
+
+        _body0_targets = _susp_joint.GetRelationship("physics:body0").GetTargets()
+        _body1_targets = _susp_joint.GetRelationship("physics:body1").GetTargets()
+        if len(_body0_targets) != 1 or len(_body1_targets) != 1:
+            print(f"[Physics] Suspension joint repair skipped: expected one body0 and one body1 target at {_susp_path}")
+            continue
+
+        _body0 = stage.GetPrimAtPath(_body0_targets[0])
+        _body1 = stage.GetPrimAtPath(_body1_targets[0])
+        _pos0_attr = _susp_joint.GetAttribute("physics:localPos0")
+        _rot0_attr = _susp_joint.GetAttribute("physics:localRot0")
+        _pos1_attr = _susp_joint.GetAttribute("physics:localPos1")
+        _rot1_attr = _susp_joint.GetAttribute("physics:localRot1")
+        _pos0, _rot0 = _pos0_attr.Get(), _rot0_attr.Get()
+
+        if (not _body0.IsValid() or not _body1.IsValid() or _pos0 is None or _rot0 is None
+                or not _pos1_attr or not _rot1_attr):
+            print(f"[Physics] Suspension joint repair skipped: incomplete joint data at {_susp_path}")
+            continue
+
+        try:
+            def _quatd(_q):
+                _im = _q.GetImaginary()
+                return Gf.Quatd(float(_q.GetReal()), Gf.Vec3d(float(_im[0]), float(_im[1]), float(_im[2])))
+
+            # USD uses row-vector transforms: local_frame * body_world.
+            _local0 = Gf.Matrix4d(1.0)
+            _local0.SetRotate(Gf.Rotation(_quatd(_rot0)))
+            _local0.SetTranslateOnly(Gf.Vec3d(float(_pos0[0]), float(_pos0[1]), float(_pos0[2])))
+            _body0_world = omni.usd.get_world_transform_matrix(_body0)
+            _body1_world = omni.usd.get_world_transform_matrix(_body1)
+            _joint_world = _local0 * _body0_world
+            _local1 = _joint_world * _body1_world.GetInverse()
+
+            _new_pos1 = _local1.ExtractTranslation()
+            _new_rot1 = _local1.ExtractRotationQuat()
+            _new_im = _new_rot1.GetImaginary()
+            _pos1_attr.Set(Gf.Vec3f(float(_new_pos1[0]), float(_new_pos1[1]), float(_new_pos1[2])))
+            _rot1_attr.Set(Gf.Quatf(
+                float(_new_rot1.GetReal()),
+                Gf.Vec3f(float(_new_im[0]), float(_new_im[1]), float(_new_im[2])),
+            ))
+
+            _anchor_error = (
+                _joint_world.ExtractTranslation()
+                - (_local1 * _body1_world).ExtractTranslation()
+            ).GetLength()
+            print(f"[Physics] Repaired suspension joint at {_susp_path}: "
+                  f"body1 local frame aligned (anchor error={_anchor_error:.6g} m)")
+        except Exception as _susp_repair_err:
+            print(f"[Physics] Suspension joint repair failed at {_susp_path}: {_susp_repair_err}")
 
     # Apply PhysicsScene overrides from configuration
     physics_opts = config.get("physics_settings", {})
