@@ -358,6 +358,28 @@ def main():
         except Exception as _susp_repair_err:
             print(f"[Physics] Suspension joint repair failed at {_susp_path}: {_susp_repair_err}")
 
+    # Imu_Sensor is a rigid body attached by the fixed joint above, but the
+    # source USD uses a negative mass sentinel without colliders from which
+    # PhysX can derive mass properties.  Give this small (30 mm, 10 g) IMU an
+    # explicit physically valid mass and cuboid inertia instead of accepting
+    # PhysX's unstable small-sphere fallback.  Do not touch the LiDAR here;
+    # that is a separate asset issue and is fixed independently.
+    for _imu_sensor in stage.Traverse():
+        _imu_sensor_path = _imu_sensor.GetPath().pathString
+        if not _imu_sensor_path.endswith("/Rigid_Bodies/Chassis/base_link/Imu_Sensor"):
+            continue
+        try:
+            from pxr import UsdPhysics
+            _imu_mass_api = UsdPhysics.MassAPI.Apply(_imu_sensor)
+            _imu_mass_api.CreateMassAttr(0.01)  # kg
+            # I = m * side^2 / 6 for a 30 mm cube with m = 10 g.
+            _imu_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(1.5e-6, 1.5e-6, 1.5e-6))
+            _imu_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
+            print(f"[Physics] Repaired IMU mass properties at {_imu_sensor_path}: "
+                  "mass=0.01 kg, diagonalInertia=(1.5e-06, 1.5e-06, 1.5e-06) kg·m²")
+        except Exception as _imu_mass_err:
+            print(f"[Physics] IMU mass-property repair failed at {_imu_sensor_path}: {_imu_mass_err}")
+
     # Apply PhysicsScene overrides from configuration
     physics_opts = config.get("physics_settings", {})
     if physics_opts:
