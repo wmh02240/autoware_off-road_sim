@@ -5,7 +5,7 @@ physics_settings:
 
 graphics_settings:
   render_resolution: [2560, 1440]       # [3840, 2160] / [2560, 1440] / [1920, 1080] / [1280, 720]
-  enable_DLSS_FPS_Multiplier_x2: false  # Automatically enable DLSS FPS_Multiplier x2
+  enable_DLSS_FPS_Multiplier_x2: true   # Automatically enable DLSS FPS_Multiplier x2
   disable_shadows: false                # Skip shadow map rendering (large GPU win)
   disable_ambient_occlusion: true       # Skip screen-space AO
   disable_reflections: true             # Skip RTX reflections
@@ -113,4 +113,3 @@ semantic_segmentation:
   images_dir: "data/segmentation/pumptrack_simple/pumptrack_simple/images"
   gt_masks_dir: "data/segmentation/pumptrack_simple/pumptrack_simple/gt_masks"
   overwrite_existing: false
-
