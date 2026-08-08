@@ -2166,6 +2166,31 @@ def main():
     
     input_iface = carb.input.acquire_input_interface()
     keyboard = None
+
+    # Kit binds SPACE to the toolbar's Play/Pause action.  A raw keyboard-event
+    # callback is too late to override that hotkey, so remove the toolbar action
+    # from Kit's *in-process* hotkey registry instead.  This has no effect on
+    # the Timeline UI buttons or on the user's persistent hotkey settings.
+    try:
+        import omni.kit.hotkeys.core as _hotkeys_core
+
+        _hotkey_registry = _hotkeys_core.get_hotkey_registry()
+        _removed_space_hotkeys = 0
+        for _hotkey in list(_hotkey_registry.get_all_hotkeys_for_key("SPACE")):
+            _hotkey_desc = " ".join(
+                str(getattr(_hotkey, _name, ""))
+                for _name in ("id", "module", "action", "action_text")
+            ).lower()
+            if "toolbar" in _hotkey_desc and "play" in _hotkey_desc:
+                if _hotkey_registry.deregister_hotkey(_hotkey):
+                    _removed_space_hotkeys += 1
+        if _removed_space_hotkeys:
+            print(f"[Input] Reserved Space for brake; removed {_removed_space_hotkeys} Timeline Play/Pause hotkey(s).")
+        else:
+            print("[Input] No Timeline Space hotkey found; Space remains available for brake.")
+    except Exception as _space_hotkey_err:
+        print(f"[Input] Could not unregister Timeline Space hotkey: {_space_hotkey_err}")
+
     iteration = 0
     _restart_pending = False  # True for one frame while stop→play transition settles
     _soft_restart_time = 0.0  # sim clock value at the moment of last restart trigger

@@ -62,8 +62,7 @@ vehicles:
     enable_lidar: true
     enable_gnss: true
 
-# These are the hardcoded topic names baked into the USD.
-# launch_sim.py will remap them to /{topic_prefix}/{topic} for each vehicle.
+# These are the hardcoded topic names baked into the USD. launch_sim.py will remap them to /{topic_prefix}/{topic} for each vehicle.
 frame_ids_to_remap:
   - "odom"
   - "base_link"

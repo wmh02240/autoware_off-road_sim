@@ -170,7 +170,7 @@ Inside the container:
 | `S` / `↓` | Accelerate backward |
 | `A` / `←` | Steer left |
 | `D` / `→` | Steer right |
-| `Space` | Pause/Start the simulation |
+| `Space` | Brake (sets speed and steering command to zero while held) |
 | `~` | Switch camera view to Perspective |
 | `1` | Switch camera view to Ego Vehicle |
 | `2` | Switch camera view to Opponent Vehicle |
