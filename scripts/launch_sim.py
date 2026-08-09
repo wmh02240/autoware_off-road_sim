@@ -3,6 +3,7 @@ import argparse
 import collections
 import time
 import subprocess
+import sys
 import yaml
 try:
     from isaacsim import SimulationApp
@@ -23,7 +24,9 @@ def main():
         default=False,
         help="Run without a display window. All vehicles default to ROS2_CONTROL mode.",
     )
-    args = parser.parse_args()
+    # Preserve Kit/Carbonite arguments (for example Tracy profiler switches)
+    # for SimulationApp while still parsing this launcher's own options.
+    args, _kit_extra_args = parser.parse_known_args()
     headless_mode = args.headless
 
     config_path = os.path.abspath(args.config)
@@ -113,6 +116,32 @@ def main():
             print(f"[SimApp] Warning: isaacsim.exp.full.kit not found in {_apps_dir}, falling back to default")
             _exp_full = ""
     _sim_cfg = {"headless": headless_mode, "experience": _exp_full}
+
+    # Tracy must be configured before SimulationApp starts.  The YAML switch
+    # keeps normal runs free of profiler overhead, while parse_known_args above
+    # still permits manual Kit profiler flags on the command line.
+    _profiling_cfg = config.get("profiling", {})
+    _tracy_cfg = _profiling_cfg.get("tracy", {})
+    _tracy_enabled = bool(_tracy_cfg.get("enabled", False))
+    if _tracy_enabled:
+        _sim_cfg["profiler_backend"] = ["tracy"]
+        _tracy_gpu = bool(_tracy_cfg.get("gpu", True))
+        _tracy_args = [
+            "--enable", "omni.kit.profiler.tracy",
+            "--/profiler/enabled=true",
+            "--/app/profilerBackend=tracy",
+            "--/app/profileFromStart=true",
+        ]
+        if _tracy_gpu:
+            _tracy_args.extend([
+                "--/profiler/gpu=true",
+                "--/profiler/gpu/tracyInject/enabled=true",
+            ])
+        for _tracy_arg in _tracy_args:
+            if _tracy_arg not in sys.argv:
+                sys.argv.append(_tracy_arg)
+        print(f"[Profile] Tracy enabled (GPU trace: {_tracy_gpu}). "
+              "Open the bundled Tracy UI and click Connect.")
     if not headless_mode:
         _sim_cfg["width"]           = render_res[0]
         _sim_cfg["height"]          = render_res[1]
@@ -513,8 +542,7 @@ def main():
         return found
 
     # Enable everything we can for the bridge and core nodes.
-    enable_preferred(["isaacsim.ros2.bridge", "omni.isaac.ros2_bridge", 
-                      "isaacsim.ros2.nodes", "isaacsim.core_nodes", "omni.isaac.core_nodes"])
+    enable_preferred(["isaacsim.ros2.bridge", "omni.isaac.ros2_bridge", "isaacsim.ros2.nodes", "isaacsim.core_nodes", "omni.isaac.core_nodes"])
     
     import omni.usd
     stage = omni.usd.get_context().get_stage()
@@ -1456,7 +1484,6 @@ def main():
             except Exception: pass
             try: _map_stage.RemovePrim(_map_cp)
             except Exception: pass
-
         except Exception as _map_err:
             import traceback as _map_tb
             print(f"[Map] Error during map generation: {_map_err}")
@@ -2213,8 +2240,24 @@ def main():
     _FC_UP = Gf.Vec3d(0, 0, 1)          # constant up-vector for follow-camera math
     def _avg(b): return sum(b) / len(b)  # smoothing helper for follow-camera buffers
     _gnss_base_prims = {}  # veh_name -> cached Usd.Prim (avoids GetPrimAtPath every tick)
+
+    # Keep this profiler intentionally lightweight: 
+    # it separates time spent in Kit/PhysX/OmniGraph from this launcher's Python work.
+    # This is the first split needed when RT is low but aggregate CPU/GPU utilisation is also low.
+    _profile_cfg = config.get("profiling", {})
+    _profile_enabled = bool(_profile_cfg.get("enabled", True))
+    _profile_interval_s = max(0.25, float(_profile_cfg.get("interval_s", 1.0)))
+    _profile_window_start = time.perf_counter()
+    _profile_update_ms = []
+    _profile_post_ms = []
+    if _profile_enabled:
+        print(f"[Profile] Enabled: reporting update/post-loop timing every "
+              f"{_profile_interval_s:g}s.")
+
     while simulation_app.is_running():
+        _profile_tick_start = time.perf_counter() if _profile_enabled else 0.0
         simulation_app.update()
+        _profile_after_update = time.perf_counter() if _profile_enabled else 0.0
         iteration += 1
 
         # Publish control_mode status at 10 Hz (every 100 ms).
@@ -2771,7 +2814,7 @@ def main():
             for _sl in _status_lines:
                 print(f"\r{_sl:<70}", flush=False)
             if _status_lines:
-                import sys; sys.stdout.flush()
+                sys.stdout.flush()
             _last_n_status_lines = len(_status_lines)
 
         # Follow Cameras (skipped in headless mode — no viewport)
@@ -3046,7 +3089,6 @@ def main():
         if is_recording and seg_enabled and seg_rgb_annot and seg_mask_annot:
             if iteration % seg_capture_freq == 0:
                 try:
-                    # simulation_app.update() already rendered this frame;
                     # annotators pull the latest buffer directly — no orchestrator step needed.
                     _rgb_data = seg_rgb_annot.get_data()
                     _seg_data = seg_mask_annot.get_data()
@@ -3104,6 +3146,37 @@ def main():
                     import traceback
                     print(f"[Record] Capture error: {_cap_err}")
                     traceback.print_exc()
+
+        if _profile_enabled:
+            _profile_tick_end = time.perf_counter()
+            _profile_update_ms.append((_profile_after_update - _profile_tick_start) * 1000.0)
+            _profile_post_ms.append((_profile_tick_end - _profile_after_update) * 1000.0)
+            _profile_elapsed = _profile_tick_end - _profile_window_start
+            if _profile_elapsed >= _profile_interval_s:
+                _profile_count = len(_profile_update_ms)
+                def _profile_summary(samples):
+                    _sorted = sorted(samples)
+                    _p95_index = min(len(_sorted) - 1, int(0.95 * (len(_sorted) - 1)))
+                    return sum(samples) / len(samples), _sorted[_p95_index], max(samples)
+
+                _upd_avg, _upd_p95, _upd_max = _profile_summary(_profile_update_ms)
+                _post_avg, _post_p95, _post_max = _profile_summary(_profile_post_ms)
+                _total_avg = _upd_avg + _post_avg
+                _update_share = (100.0 * _upd_avg / _total_avg) if _total_avg else 0.0
+                print(
+                    f"[Profile] loop={_profile_count / _profile_elapsed:.1f} Hz "
+                    f"({_profile_count} ticks/{_profile_elapsed:.2f}s) | "
+                    f"update avg/p95/max={_upd_avg:.2f}/{_upd_p95:.2f}/{_upd_max:.2f} ms | "
+                    f"post avg/p95/max={_post_avg:.2f}/{_post_p95:.2f}/{_post_max:.2f} ms | "
+                    f"update={_update_share:.0f}%"
+                )
+                # The terminal RT display rewrites its previous status lines
+                # using cursor-up escapes.  A profiler line is persistent
+                # output, so prevent the next status update from overwriting it.
+                _last_n_status_lines = 0
+                _profile_window_start = _profile_tick_end
+                _profile_update_ms.clear()
+                _profile_post_ms.clear()
 
     simulation_app.close()
 

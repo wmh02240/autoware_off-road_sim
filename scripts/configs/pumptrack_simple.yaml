@@ -1,17 +1,26 @@
 physics_settings:
-  time_steps_per_second: 60             # Physics tick rate (Hz)
-  solver_position_iterations: 8         # Per-articulation position iterations (default 16; 4 stable for RC car)
-  solver_velocity_iterations: 2         # Per-articulation velocity iterations (default 4)
+  time_steps_per_second: 100             # Physics tick rate (Hz)
+  solver_position_iterations: 4         # Per-articulation position iterations (default 16; 4 stable for RC car)
+  solver_velocity_iterations: 1         # Per-articulation velocity iterations (default 4)
+
+# Lightweight timing split for diagnosing real-time-factor bottlenecks.
+# `update` covers Kit/PhysX/OmniGraph; `post` covers launch_sim.py's Python loop.
+profiling:
+  enabled: false
+  interval_s: 1.0
+  tracy:
+    enabled: false                    # Set true to capture Kit/PhysX/OmniGraph timing in Tracy.
+    gpu: false                        # Include GPU zones; adds profiling overhead.
 
 graphics_settings:
-  render_resolution: [2560, 1440]       # [3840, 2160] / [2560, 1440] / [1920, 1080] / [1280, 720]
-  enable_DLSS_FPS_Multiplier_x2: true   # Automatically enable DLSS FPS_Multiplier x2
+  render_resolution: [2560, 1440]        # [3840, 2160] / [2560, 1440] / [1920, 1080] / [1280, 720]
+  enable_DLSS_FPS_Multiplier_x2: false  # Automatically enable DLSS FPS_Multiplier x2
   disable_shadows: false                # Skip shadow map rendering (large GPU win)
   disable_ambient_occlusion: true       # Skip screen-space AO
   disable_reflections: true             # Skip RTX reflections
 
 user_interface:
-  viewport_mode: true                   # Hide all Isaac Sim panels except the viewport
+  viewport_mode: false                   # Hide all Isaac Sim panels except the viewport
   default_control_mode: "KEYBOARD"      # Startup control mode: "KEYBOARD" or "ROS2_CONTROL"
   split_screen: true                    # Show two side-by-side viewports when both vehicles are enabled
 
@@ -75,8 +84,8 @@ topics_to_remap:
   - "/rgb"
 
 keyboard_control_settings:
-  max_speed_m_s: 6.0
-  max_steer_rad: 0.4
+  max_speed_m_s: 3.0
+  max_steer_rad: 0.8
   acceleration_m_s2: 10.0
   deceleration_m_s2: 10.0
   steering_speed_rad_s: 3.0
@@ -89,8 +98,7 @@ follow_camera:
 gnss:
   enabled: true
   publish_rate_hz: 10
-  # GPS coordinate of the simulation world origin (0, 0, 0).
-  # Sim X axis points East; sim Y axis points North.
+  # GPS coordinate of the simulation world origin (0, 0, 0). Sim X axis points East; sim Y axis points North.
   map_origin:
     latitude: 39.984699        # degrees, positive = North
     longitude: -75.226020      # degrees, positive = East
