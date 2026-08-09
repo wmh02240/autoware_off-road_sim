@@ -1,0 +1,30 @@
+schema_version: 1
+verified_at: "2026-08-09"
+
+isaac_sim:
+  repository: "https://github.com/isaac-sim/IsaacSim.git"
+  release: "v6.0.0"
+  commit: "40316786340b3f034a229d9e12650df1ac0b68ab"
+  checkout_policy: "clone release tag, then require exact full commit"
+
+lariad_offroad_nav:
+  repository: "https://github.com/LARIAD/Offroad-Nav.git"
+  branch_at_audit: "main"
+  commit: "69640cf19eec1d90214ed4a3615788dd5dc1e3c4"
+  project_license: "MIT"
+  license_copy: "third_party/LARIAD_OFFROAD_NAV_LICENSE.txt"
+  terrain_generator:
+    package_name: "terrain.generator"
+    version: "2.0.0"
+    path: "terrain.generator"
+
+asset_delivery:
+  policy: "external sparse checkout; do not commit to the main Git repository"
+  default_path: "external_assets/lariad_offroad_nav"
+  included_paths:
+    - "assets"
+    - "terrain.generator"
+    - "LICENSE"
+    - "README.md"
+  redistribution_status: "internal_evaluation_only"
+  fetch_script: "scripts/tools/fetch_lariad_assets.sh"

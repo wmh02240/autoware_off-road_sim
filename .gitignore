@@ -2,3 +2,4 @@ data/
 drive_bridge.log
 gnss_bridge.log
 *.pyc
+external_assets/

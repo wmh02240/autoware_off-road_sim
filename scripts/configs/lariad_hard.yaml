@@ -1,0 +1,90 @@
+# LARIAD hard-scene smoke-test configuration (single vehicle).
+physics_settings:
+  time_steps_per_second: 100
+  solver_position_iterations: 4
+  solver_velocity_iterations: 1
+
+graphics_settings:
+  render_resolution: [1920, 1080]
+  enable_DLSS_FPS_Multiplier_x2: false
+  disable_shadows: false
+  disable_ambient_occlusion: true
+  disable_reflections: true
+
+user_interface:
+  viewport_mode: false
+  default_control_mode: "KEYBOARD"
+  split_screen: false
+
+map_server:
+  enabled: false
+
+network_setup:
+  ros2_domain_id: 0
+  network_interface: "auto"
+  ros2_cmd_timeout_s: 3.0
+
+environment:
+  asset: "external_assets/lariad_offroad_nav/compat/hard.usda"
+  scale: [1.0, 1.0, 1.0]
+  rotation_euler: [0.0, 0.0, -179.6158]
+  # launch_sim.py authors scale/rotate/translate in this order; this local
+  # translation reproduces the source map's final world translation.
+  translation: [-0.0089229767, 0.0000598346, 0.0]
+  frictions:
+    - name: "GeneratedTerrainMaterial"
+      dynamic_friction: 0.45
+      static_friction: 0.60
+    - name: "TirePhysicsMaterial"
+      dynamic_friction: 1.0
+      static_friction: 1.0
+
+vehicles:
+  - name: "Ego_Vehicle"
+    enabled: false
+    asset: "assets/vehicles/roboracer_max.usd"
+    topic_prefix: "/ego"
+    spawn_position: [-0.3063, 23.3731, 0.15]
+    spawn_orientation: [0.0, 0.0, -90.0]
+    enable_camera: true
+    enable_lidar: true
+    enable_gnss: true
+
+  - name: "Opponent_Vehicle"
+    enabled: true
+    asset: "assets/vehicles/roboracer_offroad.usd"
+    topic_prefix: "/opponent"
+    spawn_position: [-0.3063, 23.3731, 0.15]
+    spawn_orientation: [0.0, 0.0, -90.0]
+    enable_camera: true
+    enable_lidar: true
+    enable_gnss: true
+
+frame_ids_to_remap: ["odom", "base_link"]
+topics_to_remap: ["/drive", "/imu", "/odom", "/point_cloud", "/rgb"]
+
+keyboard_control_settings:
+  max_speed_m_s: 3.0
+  max_steer_rad: 0.8
+  acceleration_m_s2: 6.0
+  deceleration_m_s2: 8.0
+  steering_speed_rad_s: 3.0
+
+follow_camera:
+  distance: 4.5
+  height: 1.5
+  focus_height: 0.8
+
+gnss:
+  enabled: true
+  publish_rate_hz: 10
+  map_origin:
+    latitude: 48.812778
+    longitude: 2.210278
+    altitude: 0.0
+  noise:
+    horizontal_stddev_m: 0.5
+    altitude_stddev_m: 1.0
+
+semantic_segmentation:
+  enabled: false

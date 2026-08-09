@@ -74,10 +74,16 @@ ENV OMNI_KIT_ALLOW_ROOT=1
 # Source ROS 2 setup in bashrc
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 
-# Clone Isaac Sim repository
+# Clone a reproducible Isaac Sim release.  The tag makes the intended release
+# readable; the full commit check prevents a moved tag from silently changing
+# the image contents.
+ARG ISAAC_SIM_REF=v6.0.0
+ARG ISAAC_SIM_COMMIT=40316786340b3f034a229d9e12650df1ac0b68ab
 WORKDIR /root
-RUN git clone https://github.com/isaac-sim/IsaacSim.git isaacsim && \
+RUN git clone --branch "${ISAAC_SIM_REF}" --depth 1 \
+        https://github.com/isaac-sim/IsaacSim.git isaacsim && \
     cd isaacsim && \
+    test "$(git rev-parse HEAD)" = "${ISAAC_SIM_COMMIT}" && \
     git lfs install && \
     git lfs pull
 

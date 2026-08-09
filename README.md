@@ -70,7 +70,26 @@ cd autoware_off-road_sim
 ./docker/build.sh
 ```
 
-> **Note:** `Isaac Sim 6.0 Early Developer Release` is built by default. To use `Isaac Sim 5.1`, edit `docker/Dockerfile` and remove `-b develop` from the `git clone` command.
+> **Version pinning:** `docker/Dockerfile` verifies both `ISAAC_SIM_REF` and the full `ISAAC_SIM_COMMIT`. To deliberately select another release, update both build arguments and validate the simulator before committing the change. The dependency lock is recorded in [`third_party/lariad_versions.yaml`](third_party/lariad_versions.yaml).
+
+### LARIAD Terrain Assets
+
+The optional LARIAD terrain generator and its large environment assets are not stored in this repository or copied into the Docker build context. Fetch the audited upstream revision into the ignored `external_assets/` directory:
+
+```bash
+./scripts/tools/fetch_lariad_assets.sh
+```
+
+This performs a sparse checkout at the pinned LARIAD commit and verifies the resulting revision. These assets are currently approved for **internal evaluation only**, because the upstream MIT license covers the project code but per-asset redistribution terms are incomplete. See [`third_party/LARIAD_ASSET_MANIFEST.md`](third_party/LARIAD_ASSET_MANIFEST.md) before publishing or redistributing a generated scene.
+
+After entering the Isaac Sim 6.0.0 container, generate and validate the non-destructive compatibility layers:
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/prepare_lariad_scenes.py
+```
+
+The generated `easy.usda`, `medium.usda`, and `hard.usda` files are written to the ignored `external_assets/lariad_offroad_nav/compat/` directory. The script removes the embedded Barakuda and broken `block.usd` payload, rewrites legacy asset paths, supplies `defaultPrim`, metre/Z-up metadata, and verifies that the environment contains no `PhysicsScene`. It never modifies the upstream binary USD files. Re-run validation without regenerating the files with `--check`.
 
 
 
@@ -109,6 +128,19 @@ To run with a different configuration file, use the `--config` flag:
 ```bash
 /root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_sim.py --config <path-to-config>
 ```
+
+The LARIAD stage-1 single-vehicle smoke-test configurations are:
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
+  --config scripts/configs/lariad_easy.yaml
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
+  --config scripts/configs/lariad_medium.yaml
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
+  --config scripts/configs/lariad_hard.yaml
+```
+
+`launch_lawn_mower_sim.py` is a dedicated launcher copy. Lawn/LARIAD-specific behavior is isolated there; the original `launch_sim.py` and its existing environment startup behavior remain unchanged. Without `--config`, the dedicated launcher defaults to `lariad_easy.yaml`.
 
 > **Note:** Shader compilation takes several minutes on first launch. Isaac Sim can feel unresponsive during this time.
 
