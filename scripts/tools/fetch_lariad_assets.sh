@@ -8,6 +8,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 destination="${1:-${repo_root}/external_assets/lariad_offroad_nav}"
 
+# The project is commonly bind-mounted into a container as root while the
+# checkout is owned by the host user. Scope Git's ownership exception to this
+# exact pinned checkout and to each command; do not mutate global Git config.
+git_in_checkout() {
+    git -c "safe.directory=${destination}" -C "${destination}" "$@"
+}
+
 ensure_legacy_extension_link() {
     local link_parent="${destination}/isaac/extsUser"
     local link_path="${link_parent}/terrain.generator"
@@ -33,7 +40,7 @@ if [[ -e "${destination}" ]]; then
         exit 1
     fi
 
-    actual_commit="$(git -C "${destination}" rev-parse HEAD)"
+    actual_commit="$(git_in_checkout rev-parse HEAD)"
     if [[ "${actual_commit}" != "${LARIAD_COMMIT}" ]]; then
         echo "Error: existing checkout is at ${actual_commit}; expected ${LARIAD_COMMIT}." >&2
         echo "Move the directory aside and run this script again. No files were changed." >&2
@@ -47,11 +54,11 @@ fi
 
 mkdir -p "$(dirname "${destination}")"
 git clone --filter=blob:none --no-checkout "${LARIAD_REPOSITORY}" "${destination}"
-git -C "${destination}" sparse-checkout init --cone
-git -C "${destination}" sparse-checkout set assets terrain.generator LICENSE README.md
-git -C "${destination}" checkout --detach "${LARIAD_COMMIT}"
+git_in_checkout sparse-checkout init --cone
+git_in_checkout sparse-checkout set assets terrain.generator LICENSE README.md
+git_in_checkout checkout --detach "${LARIAD_COMMIT}"
 
-actual_commit="$(git -C "${destination}" rev-parse HEAD)"
+actual_commit="$(git_in_checkout rev-parse HEAD)"
 if [[ "${actual_commit}" != "${LARIAD_COMMIT}" ]]; then
     echo "Error: checkout verification failed: ${actual_commit}" >&2
     exit 1

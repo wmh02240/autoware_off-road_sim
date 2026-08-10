@@ -1,0 +1,20 @@
+schema_version: 1
+seed: 20260810
+parent_path: /World/GeneratedForest
+asset_root: ""
+
+terrain:
+  # Deliberately compact so the mandatory 10-cycle smoke test remains fast.
+  size_m: [10.0, 10.0]
+  resolution_m: 1.0
+  elevation_delta_m: 1.0
+  octaves: 2
+  persistence: 0.4
+  lacunarity: 2.0
+
+assets:
+  - {name: Grass, density_per_100m2: 10, scale_min: 0.9, scale_max: 1.1}
+  - {name: Birch, density_per_100m2: 1, scale_min: 0.85, scale_max: 1.15}
+  - {name: Rock, density_per_100m2: 1, scale_min: 0.3, scale_max: 0.7}
+  # Missing in the pinned public checkout; diagnosed and skipped safely.
+  - {name: Switchgrass, density_per_100m2: 1}

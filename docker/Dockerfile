@@ -95,8 +95,19 @@ WORKDIR /root/isaacsim
 # Note: Ensure this step effectively builds without GPU requirement
 RUN echo "yes" | ./build.sh
 
+# Install generator dependencies into Isaac Sim's Python at build time. The
+# extension never performs network installation at application startup.
+COPY extensions/lawn.terrain.generator/requirements.txt /tmp/lawn-generator-requirements.txt
+RUN /root/isaacsim/_build/linux-x86_64/release/python.sh -m pip install \
+        --no-cache-dir -r /tmp/lawn-generator-requirements.txt
+
 # Copy project files
 COPY . /workspace/autoware_off-road_sim
+
+# Register the project extension in Kit's built-in search directory. This is a
+# symlink so bind-mounted source changes remain immediately visible at runtime.
+RUN ln -s /workspace/autoware_off-road_sim/extensions/lawn.terrain.generator \
+        /root/isaacsim/_build/linux-x86_64/release/exts/lawn.terrain.generator
 
 # Setup Entrypoint
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

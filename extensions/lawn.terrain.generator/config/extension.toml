@@ -1,0 +1,26 @@
+[package]
+name = "lawn.terrain.generator"
+version = "2.0.0"
+authors = ["Eddie Groh", "Joel Ventola", "Autoware Off-road contributors"]
+title = "Lawn Terrain Generator"
+description = "Isaac Sim 6.x adaptation of LARIAD terrain.generator 2.0.0"
+readme = "docs/README.md"
+category = "Simulation"
+keywords = ["terrain", "lawn", "forest", "generator"]
+changelog = "docs/CHANGELOG.md"
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"omni.kit.menu.utils" = {}
+"omni.usd" = {}
+"omni.usd.schema.physx" = {}
+"omni.physx" = {}
+
+[[python.module]]
+name = "lawn.terrain.generator"
+
+[[test]]
+dependencies = ["omni.kit.test"]
+
+[settings]
+exts."lawn.terrain.generator".assetRoot = ""

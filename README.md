@@ -212,6 +212,43 @@ Inside the container:
 /root/isaacsim/_build/linux-x86_64/release/isaac-sim.sh
 ```
 
+### Lawn Terrain Generator (stage 2)
+
+Fetch the pinned LARIAD assets first, then launch the editor with the project
+extension registered in Isaac Sim's built-in search folder:
+
+```bash
+./scripts/tools/fetch_lariad_assets.sh
+./scripts/tools/install_lawn_generator.sh
+/root/isaacsim/_build/linux-x86_64/release/isaac-sim.sh \
+  --ext-folder /workspace/autoware-off-road_sim/extensions \
+  --enable lawn.terrain.generator
+```
+
+The installer creates only a symlink under Isaac Sim's `release/exts` folder.
+This ensures the Full application can resolve the extension during cold-start
+dependency solving. Re-running the installer is safe.
+
+Open **Window > Lawn Terrain Generator**. Asset discovery checks every registry
+entry and reports unavailable assets; `Switchgrass` and `Container` are disabled
+with a warning in the pinned public checkout. Override the external data root with
+`--/exts/lawn.terrain.generator/assetRoot=/absolute/path/to/data` when needed.
+
+The same generator runs headlessly from YAML and does not require UI clicks:
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/generate_lawn_scene.py \
+  --config scripts/configs/lawn_generator_stage2.yaml \
+  --output /tmp/lawn_generator_stage2.usda
+```
+
+Use `--cycles 10` for the required generate/clear leak smoke test. The command
+also checks fixed-seed heightfield/object counts, verifies that no `PhysicsScene`
+was authored, and exercises extension disable/re-enable. Python dependencies are
+declared in `extensions/lawn.terrain.generator/requirements.txt` and installed
+into Isaac Sim's bundled Python by the Dockerfile.
+
 ---
 
 

@@ -33,5 +33,12 @@ else
     echo "Isaac Sim build detected."
 fi
 
+# Register the bind-mounted project extension before Kit performs dependency
+# solving. This is idempotent and creates only a symlink in release/exts.
+LAWN_GENERATOR_INSTALLER="/workspace/autoware_off-road_sim/scripts/tools/install_lawn_generator.sh"
+if [ -f "${LAWN_GENERATOR_INSTALLER}" ]; then
+    bash "${LAWN_GENERATOR_INSTALLER}"
+fi
+
 # Execute the passed command
 exec "$@"

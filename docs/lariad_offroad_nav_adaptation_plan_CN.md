@@ -315,6 +315,27 @@ Isaac Sim 6.0 已将多项功能迁移到 Core Experimental API 和新的 Simula
 - 固定 seed 产生相同高度场和对象数量；
 - Headless 模式可以通过配置文件生成场景，不依赖 UI 点击。
 
+#### 实施状态（2026-08-10）
+
+阶段 2 的适配代码已落地到 `extensions/lawn.terrain.generator/`：
+
+- 扩展及 Python module 均更名为 `lawn.terrain.generator`，保留上游作者、固定 commit、MIT 许可证指引和修改说明；
+- `extension.toml` 声明 Kit UI、菜单、USD 和测试依赖，第三方 Python 版本范围保存在扩展专用 `requirements.txt`，Docker 构建时安装到 Isaac Sim Python；
+- 菜单注册、Stage 事件订阅、窗口和后台任务均有对应销毁逻辑，重复禁用不会保留窗口或订阅；
+- 高度场和实例姿态由纯计算模块生成，UI 路径在线程池中计算，USD writer 强制由创建它的 Kit 主线程调用；
+- 高度场采用扩展内置的 NumPy 平滑 fBm，避免现有容器因缺少 `perlin_noise` 而在运行时失败或在线安装依赖；
+- 资产根支持扩展 setting、环境变量、YAML 和项目默认路径，注册表会逐项检查；缺失的 `Switchgrass`、`Container` 会诊断并跳过；
+- 生成器不创建或配置 `PhysicsScene`，不包含旧重力换算逻辑；地形保留静态网格碰撞，树木和岩石仅使用 capsule/sphere 简化代理；
+- 植被和视觉对象使用标准 `UsdGeom.PointInstancer` prototype relationship，不再使用上游 Instance0/可见性 workaround；
+- `scripts/tools/generate_lawn_scene.py` 提供 YAML 驱动的 headless 入口，并在 `--cycles 10` 时执行确定性、清空和 prim 泄漏检查；
+- 已删除模板 Hello World 测试，新增纯计算与源码契约测试。
+
+运行时验收应在现有 `autoware-off-road_sim` 容器中执行 README 所列命令；生成脚本会输出高度场 SHA-256、对象数量、缺失资产诊断及扩展启停结果。
+
+运行时验收已在现有 `autoware_off-road_sim` 容器（Isaac Sim 6.0.0、RTX 4060 Ti）完成：扩展由 Extension Manager 发现并启用，真实窗口类可构造/销毁，连续 10 轮生成与清空正常退出，禁用后再次启用成功；固定 seed 的高度场 SHA-256 始终为 `de06202e59378766abe3a2bdbe825ec42e80fe4eb66275f9e0c17cc0edbc7e86`，每轮对象计数均为 Grass 10、Birch 1、Rock 1、Switchgrass 0；输出 USD 依赖扫描无 unresolved dependency，包含有效 defaultPrim、米制、Z-up 和标准 PointInstancer，且不包含 PhysicsScene。主机侧 7 项确定性/源码契约测试亦全部通过。
+
+移除外部噪声包后，当前内置 NumPy fBm 在同一阶段 2 配置下的高度场 SHA-256 更新为 `4d9c56b18a82cf0350fc731b464f1228aed06cbd1c41f9302c06580d543be0e3`，高程范围为 -0.5～0.5 m，对象数量保持不变。
+
 ### 5.4 阶段 3：面向割草机的生成器改造
 
 原生成器的 Perlin 地形偏森林越野。割草场景需要平缓、连续、有明确作业边界的地形模型。
