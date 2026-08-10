@@ -327,10 +327,10 @@ Isaac Sim 6.0 已将多项功能迁移到 Core Experimental API 和新的 Simula
 - 资产根支持扩展 setting、环境变量、YAML 和项目默认路径，注册表会逐项检查；缺失的 `Switchgrass`、`Container` 会诊断并跳过；
 - 生成器不创建或配置 `PhysicsScene`，不包含旧重力换算逻辑；地形保留静态网格碰撞，树木和岩石仅使用 capsule/sphere 简化代理；
 - 植被和视觉对象使用标准 `UsdGeom.PointInstancer` prototype relationship，不再使用上游 Instance0/可见性 workaround；
-- `scripts/tools/generate_lawn_scene.py` 提供 YAML 驱动的 headless 入口，并在 `--cycles 10` 时执行确定性、清空和 prim 泄漏检查；
+- `scripts/tools/generate_lawn_scene.py` 提供 YAML 驱动的 headless 入口；`--cycles 10` 执行确定性、清空和 prim 泄漏检查，完整 UI 与扩展启停验收需额外传入 `--validate-lifecycle`，普通场景生成不会重复加载重场景；
 - 已删除模板 Hello World 测试，新增纯计算与源码契约测试。
 
-运行时验收应在现有 `autoware-off-road_sim` 容器中执行 README 所列命令；生成脚本会输出高度场 SHA-256、对象数量、缺失资产诊断及扩展启停结果。
+运行时验收应在现有 `autoware-off-road_sim` 容器中执行 README 所列命令；生成脚本会输出高度场 SHA-256、对象数量及缺失资产诊断，传入 `--validate-lifecycle` 时还会输出 UI 和扩展启停结果。
 
 运行时验收已在现有 `autoware_off-road_sim` 容器（Isaac Sim 6.0.0、RTX 4060 Ti）完成：扩展由 Extension Manager 发现并启用，真实窗口类可构造/销毁，连续 10 轮生成与清空正常退出，禁用后再次启用成功；固定 seed 的高度场 SHA-256 始终为 `de06202e59378766abe3a2bdbe825ec42e80fe4eb66275f9e0c17cc0edbc7e86`，每轮对象计数均为 Grass 10、Birch 1、Rock 1、Switchgrass 0；输出 USD 依赖扫描无 unresolved dependency，包含有效 defaultPrim、米制、Z-up 和标准 PointInstancer，且不包含 PhysicsScene。主机侧 7 项确定性/源码契约测试亦全部通过。
 
@@ -462,6 +462,37 @@ output:
   remove_physics_scene: true
   set_default_prim: true
 ```
+
+#### 实施状态（2026-08-10）
+
+阶段 3 已完成首个 `offroad_lawn_01` 可验收实现，其视觉基准为 Offroad-Nav
+`medium/hard`，而不是住宅后院：
+
+- 已实现 `flat`、`single_slope`、`rolling_lawn`、`terraced_lawn` 和
+  `heightmap` 五种模式，并在生成后显式约束坡度、局部曲率和出生平台平整度；
+- 已实现 `mowable_area`、`no_mow_zone`、`boundary_buffer`、
+  `tall_grass_band`、`bare_soil_patch`、`spawn_pad` 六类确定性 mask；
+- 植被放置支持允许/禁止 mask、净空、语义标签和 LiDAR 可见性，短草不创建碰撞；
+- 默认场景恢复上游 `Steinwurzel` Albedo/Normal/AO/Roughness 地表材质、
+  `autumn_park_2k.hdr` DomeLight 和物理太阳光；
+- 边界林带组合 Birch、Spruce、Pine、Holly、Yew，并加入 Bush、Blueberry、
+  分层草地和苔藓岩石；中央保留连续的割草作业区和自然禁入岛；
+- 植被支持地表法向对齐，采样默认无放回以减少重叠和明显的程序化重复；
+- 业务对象能力仍由通用配置保留，外部资产通过 `asset_manifest` 声明，不在
+  Python 中硬编码路径；
+- USD 中写入业务/语义层级，并导出高程、坡度、区域 mask、ROS occupancy map、
+  作业区 GeoJSON、推荐出生位姿、语义表和带 SHA-256 的资产 manifest；
+- 阶段 2 YAML 继续兼容；未声明 `terrain.mode` 时仍使用原确定性 fBm 路径。
+
+容器内验收结果：14 项纯计算/源码契约测试通过；场景网格为 `121 x 101`，
+最大坡度 `7.4204°`（配置上限 `10°`），生成 Grass 1621、林地草 709、边缘高草
+替代层 216、混合树木 61、Bush/Blueberry 229 和 Rock 26；USD 依赖扫描无
+unresolved dependency，UI 构造销毁及
+扩展禁用/再次启用通过，且未生成 `PhysicsScene`。固定 seed 高度场 SHA-256 为
+`7a4896108d63c9f3f6d8f7ca896d7fcdc141dfd1de93525c0966e3693c4a0fc6`。
+另已使用固定中央相机完成 RTX 无头预览，确认 PBR 地表、HDRI、太阳光、树冠、
+林下植被、草簇和阴影均实际进入渲染结果；预览脚本为
+`scripts/tools/render_lawn_preview.py`。
 
 ### 5.5 阶段 4：USD 分层、打包与运行时接入
 

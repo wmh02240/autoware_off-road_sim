@@ -30,7 +30,7 @@ class GeneratorWindow:
         # Extension Manager may report the registration symlink under
         # release/exts. Resolve it before deriving the repository root.
         extension_path = Path(self._extension_path).resolve()
-        default_config = extension_path.parents[1] / "scripts/configs/lawn_generator_stage2.yaml"
+        default_config = extension_path.parents[1] / "scripts/configs/lawn_generator_stage3_offroad.yaml"
         self._window = ui.Window(EXTENSION_NAME, width=520, height=220)
         self._window.set_visibility_changed_fn(self._visibility_changed)
         with self._window.frame:

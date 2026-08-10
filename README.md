@@ -212,7 +212,7 @@ Inside the container:
 /root/isaacsim/_build/linux-x86_64/release/isaac-sim.sh
 ```
 
-### Lawn Terrain Generator (stage 2)
+### Lawn Terrain Generator (stages 2–3)
 
 Fetch the pinned LARIAD assets first, then launch the editor with the project
 extension registered in Isaac Sim's built-in search folder:
@@ -243,11 +243,37 @@ The same generator runs headlessly from YAML and does not require UI clicks:
   --output /tmp/lawn_generator_stage2.usda
 ```
 
-Use `--cycles 10` for the required generate/clear leak smoke test. The command
-also checks fixed-seed heightfield/object counts, verifies that no `PhysicsScene`
-was authored, and exercises extension disable/re-enable. Python dependencies are
-declared in `extensions/lawn.terrain.generator/requirements.txt` and installed
-into Isaac Sim's bundled Python by the Dockerfile.
+Stage 3 adds mower-oriented terrain modes, slope constraints, work/no-mow
+regions, region-aware vegetation, business objects and navigation truth. The
+UI opens the Offroad-Nav forest-lawn preset by default. It combines a constrained
+mower work area with the pinned upstream forest PBR textures, HDRI, mixed trees,
+undergrowth and moss rocks. Generate it headlessly
+inside the existing container with:
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/generate_lawn_scene.py --config scripts/configs/lawn_generator_stage3_offroad.yaml --output assets/environments/lawn_generated/offroad_lawn_01/root.usda
+```
+
+The adjacent `truth/` directory contains `elevation.npy`, `slope_deg.npy`, all
+six region masks, a ROS-compatible occupancy map, work-area GeoJSON, semantic
+labels, the recommended spawn pose and a seed/asset hash manifest. Generated
+scene outputs are intentionally ignored by Git and can be reproduced from the
+versioned YAML.
+
+Render the same fixed validation camera without opening the UI:
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/render_lawn_preview.py --stage assets/environments/lawn_generated/offroad_lawn_01/root.usda --output assets/environments/lawn_generated/offroad_lawn_01/preview.png
+```
+
+Use `--cycles 10` for the required generate/clear leak smoke test. Add
+`--validate-lifecycle` when performing the full acceptance test that also
+constructs the real UI window and exercises extension disable/re-enable. Normal
+scene generation skips that relatively expensive lifecycle check and exits as
+soon as the USD and truth data have been written. Both modes check fixed-seed
+heightfield/object counts and verify that no `PhysicsScene` was authored. Python
+dependencies are declared in `extensions/lawn.terrain.generator/requirements.txt`
+and installed into Isaac Sim's bundled Python by the Dockerfile.
 
 ---
 

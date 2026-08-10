@@ -14,5 +14,6 @@ ASSET_REGISTRY = {
     "Grass": {"file": "Grass_Short_B/Grass_Short_B.usd", "kind": "vegetation", "base_scale": 0.01},
     "Switchgrass": {"file": "Switchgrass/Switchgrass.usd", "kind": "vegetation", "base_scale": 0.01},
     "Container": {"file": "Container_J01/Container_J01_126x120x133cm_PR_V_NVD_01.usd", "kind": "object", "base_scale": 0.01},
+    "Holly": {"file": "Holly/Holly.usd", "kind": "tree", "base_scale": 0.01},
+    "Yew": {"file": "Yew/Yew.usd", "kind": "tree", "base_scale": 0.01},
 }
-

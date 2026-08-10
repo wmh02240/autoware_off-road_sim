@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .constants import ASSET_REGISTRY, ASSET_ROOT_ENV
+from .config import AssetManifestEntry
 
 
 @dataclass(frozen=True)
@@ -27,10 +28,18 @@ def discover_asset_root(extension_path: str, configured: str = "") -> Path:
     return Path(configured or candidates[-1]).expanduser().resolve()
 
 
-def audit_assets(asset_root: str | Path) -> dict[str, AssetRecord]:
+def audit_assets(
+    asset_root: str | Path,
+    manifest: tuple[AssetManifestEntry, ...] = (),
+) -> dict[str, AssetRecord]:
     root = Path(asset_root)
-    return {
+    records = {
         name: AssetRecord(name, (root / item["file"]).resolve(), (root / item["file"]).is_file(), str(item["kind"]), float(item.get("base_scale", 1.0)))
         for name, item in ASSET_REGISTRY.items()
     }
-
+    for item in manifest:
+        source = Path(item.path).expanduser()
+        path = source if source.is_absolute() else root / source
+        path = path.resolve()
+        records[item.name] = AssetRecord(item.name, path, path.is_file(), item.kind, item.base_scale)
+    return records

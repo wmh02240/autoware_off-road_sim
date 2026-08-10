@@ -3,3 +3,4 @@ drive_bridge.log
 gnss_bridge.log
 *.pyc
 external_assets/
+assets/environments/lawn_generated/
