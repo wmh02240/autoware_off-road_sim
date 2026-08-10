@@ -147,9 +147,11 @@ def main() -> int:
         traceback.print_exc()
         return 1
     finally:
-        for _ in range(3):
-            app.update()
-        app.close(wait_for_replicator=False)
+        # Do not pump extra frames or synchronously close the heavy USD stage
+        # here. All requested files were exported synchronously and this tool
+        # does not run Replicator, so Isaac Sim's documented immediate-exit path
+        # is appropriate for this one-shot process.
+        app.close(wait_for_replicator=False, skip_cleanup=True)
 
 
 if __name__ == "__main__":

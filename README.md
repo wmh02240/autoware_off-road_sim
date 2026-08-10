@@ -233,6 +233,11 @@ Open **Window > Lawn Terrain Generator**. Asset discovery checks every registry
 entry and reports unavailable assets; `Switchgrass` and `Container` are disabled
 with a warning in the pinned public checkout. Override the external data root with
 `--/exts/lawn.terrain.generator/assetRoot=/absolute/path/to/data` when needed.
+The window provides an upstream-style scrolling parameter editor. Use **Load
+Config** to populate the controls from YAML/JSON, edit terrain, regions, assets,
+surface, lighting and truth output interactively, then select **Generate All**.
+**Save Config** validates and persists the current controls; generation itself
+does not require saving first.
 
 The same generator runs headlessly from YAML and does not require UI clicks:
 

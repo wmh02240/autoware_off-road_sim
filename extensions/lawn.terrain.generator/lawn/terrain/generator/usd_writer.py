@@ -145,6 +145,25 @@ class UsdSceneWriter:
             if count == 0:
                 continue
             name = _safe_name(asset_cfg.name)
+            semantic = asset_cfg.semantic_label or (
+                "vegetation_short_grass" if asset_cfg.name == "Grass" else
+                "vegetation_tall_grass" if asset_cfg.name == "Switchgrass" else
+                "tree_trunk" if record.kind == "tree" else record.kind
+            )
+            scaled = scales * record.base_scale
+
+            # The scanned tree USDs contain their own branch PointInstancers and
+            # GeomSubsets. Nesting those assets inside another PointInstancer
+            # breaks Fabric material paths and can drop the outer 0.01 scale on
+            # leaf instances. Direct references still share asset data while
+            # preserving the complete internal hierarchy and transforms.
+            if record.kind == "tree":
+                self._add_tree_references(
+                    config.parent_path, name, record, positions, orientations, scaled, semantic, asset_cfg.lidar_visible
+                )
+                self._add_collision_proxies(config.parent_path, name, record.kind, positions, scaled)
+                continue
+
             instancer = UsdGeom.PointInstancer.Define(
                 self.stage, f"{config.parent_path}/Instances/{name}"
             )
@@ -153,11 +172,6 @@ class UsdSceneWriter:
             ).GetPrim()
             prototype.GetReferences().AddReference(str(record.path))
             prototype.SetInstanceable(True)
-            semantic = asset_cfg.semantic_label or (
-                "vegetation_short_grass" if asset_cfg.name == "Grass" else
-                "vegetation_tall_grass" if asset_cfg.name == "Switchgrass" else
-                "tree_trunk" if record.kind == "tree" else record.kind
-            )
             prototype.SetCustomDataByKey("semanticLabel", semantic)
             prototype.SetCustomDataByKey("lidarVisible", asset_cfg.lidar_visible)
             instancer.GetPrototypesRel().SetTargets([prototype.GetPath()])
@@ -166,13 +180,37 @@ class UsdSceneWriter:
             instancer.CreateOrientationsAttr(
                 [Gf.Quath(float(q[0]), Gf.Vec3h(float(q[1]), float(q[2]), float(q[3]))) for q in orientations]
             )
-            scaled = scales * record.base_scale
             instancer.CreateScalesAttr([Gf.Vec3f(float(s), float(s), float(s)) for s in scaled])
             # Collision proxies remain simple primitives. Referenced scan meshes never
             # receive triangle-mesh collision APIs per instance.
             if record.kind in {"tree", "rock"}:
                 self._add_collision_proxies(config.parent_path, name, record.kind, positions, scaled)
         return result
+
+    def _add_tree_references(
+        self,
+        parent: str,
+        name: str,
+        record: AssetRecord,
+        positions,
+        orientations,
+        scales,
+        semantic: str,
+        lidar_visible: bool,
+    ) -> None:
+        tree_parent = f"{parent}/Instances/{name}"
+        UsdGeom.Xform.Define(self.stage, tree_parent)
+        for index, (position, orientation, scale) in enumerate(zip(positions, orientations, scales)):
+            prim = UsdGeom.Xform.Define(self.stage, f"{tree_parent}/Instance_{index:04d}").GetPrim()
+            prim.GetReferences().AddReference(str(record.path))
+            prim.SetCustomDataByKey("semanticLabel", semantic)
+            prim.SetCustomDataByKey("lidarVisible", lidar_visible)
+            xform = UsdGeom.Xformable(prim)
+            xform.AddTranslateOp().Set(Gf.Vec3d(*map(float, position)))
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionFloat).Set(
+                Gf.Quatf(float(orientation[0]), Gf.Vec3f(*map(float, orientation[1:4])))
+            )
+            xform.AddScaleOp().Set(Gf.Vec3d(float(scale), float(scale), float(scale)))
 
     def _ground_height(self, arrays: GeneratedArrays, config: GeneratorConfig, x: float, y: float) -> float:
         sx, sy = config.terrain.size_m
@@ -267,5 +305,6 @@ class UsdSceneWriter:
                 shape.CreateRadiusAttr(max(0.1, float(scale) * 0.45))
             xform = UsdGeom.Xformable(shape.GetPrim())
             xform.AddTranslateOp().Set(Gf.Vec3d(*map(float, position)))
+            UsdGeom.Imageable(shape.GetPrim()).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
             UsdPhysics.CollisionAPI.Apply(shape.GetPrim())
             PhysxSchema.PhysxCollisionAPI.Apply(shape.GetPrim())

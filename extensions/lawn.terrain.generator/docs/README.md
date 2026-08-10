@@ -5,6 +5,14 @@ Isaac Sim 6.x adaptation of LARIAD `terrain.generator` 2.0.0. Open it from
 the window, `--/exts/lawn.terrain.generator/assetRoot=...`, or the
 `LARIAD_TERRAIN_ASSET_ROOT` environment variable.
 
+The window retains the upstream generator's interactive workflow with a
+scrolling, collapsible editor for general, terrain, work-region, asset, ground
+surface, lighting and navigation-truth settings. **Load Config** populates all
+controls from YAML/JSON, **Save Config** validates and writes the edited values,
+and **Generate All** uses the current controls without requiring a save first.
+Polygon vertices, external asset manifests and business-object declarations
+that do not have dedicated controls are preserved when a config is saved.
+
 Generation never creates a `PhysicsScene`. UI-triggered array calculation runs
 off the Kit main thread and all USD edits run on the Kit main thread. The
 command-line generator uses the same implementation without constructing UI.

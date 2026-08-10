@@ -326,7 +326,7 @@ Isaac Sim 6.0 已将多项功能迁移到 Core Experimental API 和新的 Simula
 - 高度场采用扩展内置的 NumPy 平滑 fBm，避免现有容器因缺少 `perlin_noise` 而在运行时失败或在线安装依赖；
 - 资产根支持扩展 setting、环境变量、YAML 和项目默认路径，注册表会逐项检查；缺失的 `Switchgrass`、`Container` 会诊断并跳过；
 - 生成器不创建或配置 `PhysicsScene`，不包含旧重力换算逻辑；地形保留静态网格碰撞，树木和岩石仅使用 capsule/sphere 简化代理；
-- 植被和视觉对象使用标准 `UsdGeom.PointInstancer` prototype relationship，不再使用上游 Instance0/可见性 workaround；
+- 草、灌木和岩石使用标准 `UsdGeom.PointInstancer` prototype relationship；内部自带枝叶 PointInstancer/GeomSubset 的复杂树木使用独立 Xform 引用，避免嵌套实例导致 Fabric 材质路径丢失或叶片缩放失效；
 - `scripts/tools/generate_lawn_scene.py` 提供 YAML 驱动的 headless 入口；`--cycles 10` 执行确定性、清空和 prim 泄漏检查，完整 UI 与扩展启停验收需额外传入 `--validate-lifecycle`，普通场景生成不会重复加载重场景；
 - 已删除模板 Hello World 测试，新增纯计算与源码契约测试。
 

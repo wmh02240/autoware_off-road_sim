@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+HEADLESS_SCRIPT = ROOT.parents[1] / "scripts/tools/generate_lawn_scene.py"
 
 
 class Stage2ContractTests(unittest.TestCase):
@@ -29,11 +30,48 @@ class Stage2ContractTests(unittest.TestCase):
     def test_point_instancer_uses_relationship_prototype(self):
         source = (ROOT / "lawn/terrain/generator/usd_writer.py").read_text(encoding="utf-8")
         self.assertIn("GetPrototypesRel().SetTargets", source)
-        self.assertNotIn("CreateVisibilityAttr", source)
+        self.assertNotIn("prototype.CreateVisibilityAttr", source)
+
+    def test_nested_instancer_trees_use_direct_references(self):
+        source = (ROOT / "lawn/terrain/generator/usd_writer.py").read_text(encoding="utf-8")
+        self.assertIn('if record.kind == "tree":', source)
+        self.assertIn("self._add_tree_references", source)
+        self.assertIn('f"{tree_parent}/Instance_{index:04d}"', source)
+        self.assertIn("CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)", source)
 
     def test_ui_resolves_registration_symlink_for_default_config(self):
         source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
         self.assertIn("Path(self._extension_path).resolve()", source)
+
+    def test_ui_exposes_interactive_stage3_editor(self):
+        source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
+        for label in (
+            "Load Config",
+            "Save Config",
+            "Generate All",
+            "Clear All",
+            "General Settings",
+            "Terrain",
+            "Regions and Work Areas",
+            "Trees, Rocks and Ground Vegetation",
+            "Ground Surface",
+            "Environment Lighting",
+            "Output and Navigation Truth",
+        ):
+            self.assertIn(label, source)
+        self.assertIn("ui.ScrollingFrame", source)
+        self.assertIn("ui.Separator(height=1)", source)
+        self.assertIn("ui.VStack(height=92", source)
+        self.assertIn("_runtime_config", source)
+        self.assertIn("export_truth", source)
+
+    def test_headless_lifecycle_validation_is_opt_in(self):
+        source = HEADLESS_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('"--validate-lifecycle"', source)
+        self.assertIn("if args.validate_lifecycle:", source)
+        self.assertIn("lifecycle_validation=SKIPPED", source)
+        self.assertNotIn("for _ in range(3):", source)
+        self.assertIn("skip_cleanup=True", source)
 
 
 if __name__ == "__main__":
