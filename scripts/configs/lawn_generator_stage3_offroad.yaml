@@ -4,14 +4,15 @@ scene:
   preset: offroad_nav_forest_lawn
 global_seed: 20260810
 parent_path: /World/OffroadLawn01
-asset_root: ""
-
+asset_root: ''
 terrain:
   mode: rolling_lawn
-  size_m: [60.0, 50.0]
+  size_m:
+  - 60.0
+  - 50.0
   resolution_m: 0.5
   base_height_m: 0.0
-  elevation_delta_m: 1.1
+  elevation_delta_m: 1.5
   wavelength_m: 24.0
   octaves: 6
   persistence: 0.38
@@ -21,25 +22,84 @@ terrain:
   max_local_curvature_per_m: 0.8
   smoothing_passes: 3
   spawn_pad:
-    center_m: [0.0, -13.0]
+    center_m:
+    - 0.0
+    - -13.0
     radius_m: 3.0
-
-# The broad boundary buffer is the forest belt. The remaining center is a
-# continuous mower work area; natural islands exercise no-mow planning.
+  slope_direction_deg: 0.0
+  slope_deg: 0.0
+  terrace_count: 3
+  transition_width_m: 1.0
+  heightmap_path: ''
+  heightmap_scale_m: 1.0
 regions:
   boundary_buffer_m: 8.0
   tall_grass_band_m: 2.5
   bare_soil_fraction: 0.035
   bare_soil_patch_count: 9
   zones:
-    - {name: birch_island, kind: no_mow_zone, shape: circle, center_m: [-9.0, 4.0], radius_m: 2.6}
-    - {name: rock_outcrop, kind: no_mow_zone, shape: circle, center_m: [12.0, 7.0], radius_m: 3.0}
-    - {name: wet_hollow, kind: no_mow_zone, shape: polygon, points_m: [[-3.0, 13.0], [3.0, 14.5], [6.0, 11.0], [2.0, 8.5], [-4.0, 9.5]]}
-    - {name: mower_spawn, kind: spawn_pad, shape: circle, center_m: [0.0, -13.0], radius_m: 3.0}
-    - {name: worn_entry, kind: bare_soil_patch, shape: rectangle, center_m: [0.0, -8.5], size_m: [3.0, 5.0]}
-
-# These are the same forest-floor textures used by the pinned Offroad-Nav
-# terrain generator, resolved relative to terrain.generator/data.
+  - name: birch_island
+    kind: no_mow_zone
+    shape: circle
+    center_m:
+    - -9.0
+    - 4.0
+    radius_m: 2.6
+    size_m:
+    - 0.0
+    - 0.0
+  - name: rock_outcrop
+    kind: no_mow_zone
+    shape: circle
+    center_m:
+    - 12.0
+    - 7.0
+    radius_m: 3.0
+    size_m:
+    - 0.0
+    - 0.0
+  - name: wet_hollow
+    kind: no_mow_zone
+    shape: polygon
+    points_m:
+    - - -3.0
+      - 13.0
+    - - 3.0
+      - 14.5
+    - - 6.0
+      - 11.0
+    - - 2.0
+      - 8.5
+    - - -4.0
+      - 9.5
+    center_m:
+    - 0.0
+    - 0.0
+    radius_m: 0.0
+    size_m:
+    - 0.0
+    - 0.0
+  - name: mower_spawn
+    kind: spawn_pad
+    shape: circle
+    center_m:
+    - 0.0
+    - -13.0
+    radius_m: 3.0
+    size_m:
+    - 0.0
+    - 0.0
+  - name: worn_entry
+    kind: bare_soil_patch
+    shape: rectangle
+    center_m:
+    - 0.0
+    - -8.5
+    size_m:
+    - 3.0
+    - 5.0
+    radius_m: 0.0
+  enabled: true
 surface:
   diffuse_texture: textures/Steinwurzel_Albedo.tif
   normal_texture: textures/Steinwurzel_Normal.tif
@@ -47,108 +107,166 @@ surface:
   ao_texture: textures/Steinwurzel_AmbientOcclusion.tif
   project_uvw: true
   texture_scale: 0.22
-  diffuse_color: [0.32, 0.38, 0.22]
-
+  diffuse_color:
+  - 0.32
+  - 0.38
+  - 0.22
 lighting:
   enabled: true
   hdri_path: textures/autumn_park_2k.hdr
   dome_intensity: 850.0
-  dome_rotation_deg: [0.0, 0.0, 28.0]
+  dome_rotation_deg:
+  - 0.0
+  - 0.0
+  - 28.0
   sun_intensity: 2200.0
   sun_angle_deg: 1.2
-  sun_rotation_deg: [38.0, -28.0, 32.0]
+  sun_rotation_deg:
+  - 38.0
+  - -28.0
+  - 32.0
   color_temperature_k: 5200.0
-
-# Aliases let one licensed source asset play different ecological roles without
-# hard-coding another path in Python.
 asset_manifest:
-  - {name: ForestFloorGrass, path: Grass_Short_B/Grass_Short_B.usd, kind: vegetation, base_scale: 0.01}
-  - {name: TallGrassFallback, path: Grass_Short_B/Grass_Short_B.usd, kind: vegetation, base_scale: 0.01}
-
+- name: ForestFloorGrass
+  path: Grass_Short_B/Grass_Short_B.usd
+  kind: vegetation
+  base_scale: 0.01
+- name: TallGrassFallback
+  path: Grass_Short_B/Grass_Short_B.usd
+  kind: vegetation
+  base_scale: 0.01
 assets:
-  - name: Grass
-    density_per_100m2: 125
-    scale_min: 0.75
-    scale_max: 1.15
-    allowed_masks: [mowable_area]
-    forbidden_masks: [bare_soil_patch]
-    semantic_label: vegetation_short_grass
-    lidar_visible: false
-    align_to_surface: true
-  - name: ForestFloorGrass
-    density_per_100m2: 42
-    scale_min: 0.85
-    scale_max: 1.35
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    semantic_label: vegetation_short_grass
-    lidar_visible: false
-    align_to_surface: true
-  - name: TallGrassFallback
-    density_per_100m2: 48
-    scale_min: 1.45
-    scale_max: 2.25
-    allowed_masks: [tall_grass_band, no_mow_zone]
-    semantic_label: vegetation_tall_grass
-    lidar_visible: true
-    align_to_surface: true
-  - name: Birch
-    density_per_100m2: 1.4
-    scale_min: 0.8
-    scale_max: 1.25
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 1.0
-    semantic_label: tree_trunk
-  - name: Spruce
-    density_per_100m2: 1.2
-    scale_min: 0.75
-    scale_max: 1.2
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 1.0
-    semantic_label: tree_trunk
-  - name: Pine
-    density_per_100m2: 1.0
-    scale_min: 0.8
-    scale_max: 1.3
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 1.0
-    semantic_label: tree_trunk
-  - name: Holly
-    density_per_100m2: 0.65
-    scale_min: 0.75
-    scale_max: 1.15
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 0.8
-    semantic_label: tree_trunk
-  - name: Yew
-    density_per_100m2: 0.55
-    scale_min: 0.8
-    scale_max: 1.2
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 0.8
-    semantic_label: tree_trunk
-  - name: Bush
-    density_per_100m2: 6.5
-    scale_min: 0.55
-    scale_max: 1.05
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 0.25
-    semantic_label: bush
-    align_to_surface: true
-  - name: Blueberry
-    density_per_100m2: 9.0
-    scale_min: 0.65
-    scale_max: 1.2
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 0.15
-    semantic_label: bush
-    align_to_surface: true
-  - name: Rock
-    density_per_100m2: 1.75
-    scale_min: 0.35
-    scale_max: 1.8
-    allowed_masks: [boundary_buffer, no_mow_zone]
-    clearance_m: 0.35
-    semantic_label: rock
-    align_to_surface: true
+- name: Grass
+  density_per_100m2: 1000.0
+  scale_min: 0.10000000149011612
+  scale_max: 1.0
+  allowed_masks:
+  - mowable_area
+  forbidden_masks:
+  - bare_soil_patch
+  semantic_label: vegetation_short_grass
+  lidar_visible: false
+  align_to_surface: false
+  clearance_m: 0.0
+- name: ForestFloorGrass
+  density_per_100m2: 1.0
+  scale_min: 0.019999999552965164
+  scale_max: 0.20000000298023224
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  semantic_label: vegetation_short_grass
+  lidar_visible: false
+  align_to_surface: true
+  clearance_m: 0.0
+  forbidden_masks: []
+- name: TallGrassFallback
+  density_per_100m2: 1.0
+  scale_min: 0.009999999776482582
+  scale_max: 0.20000000298023224
+  allowed_masks:
+  - tall_grass_band
+  - no_mow_zone
+  semantic_label: vegetation_tall_grass
+  lidar_visible: true
+  align_to_surface: true
+  clearance_m: 0.0
+  forbidden_masks: []
+- name: Birch
+  density_per_100m2: 1.0
+  scale_min: 0.10000000149011612
+  scale_max: 0.4000000059604645
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 1.0
+  semantic_label: tree_trunk
+  forbidden_masks: []
+  lidar_visible: true
+  align_to_surface: false
+- name: Spruce
+  density_per_100m2: 1.0
+  scale_min: 0.15000000596046448
+  scale_max: 0.800000011920929
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 1.0
+  semantic_label: tree_trunk
+  forbidden_masks: []
+  lidar_visible: true
+  align_to_surface: false
+- name: Pine
+  density_per_100m2: 1.0
+  scale_min: 0.20000000298023224
+  scale_max: 1.0
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 1.0
+  semantic_label: tree_trunk
+  forbidden_masks: []
+  lidar_visible: true
+  align_to_surface: false
+- name: Holly
+  density_per_100m2: 0.65
+  scale_min: 0.75
+  scale_max: 1.15
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 0.8
+  semantic_label: tree_trunk
+  forbidden_masks: []
+  lidar_visible: true
+  align_to_surface: false
+- name: Yew
+  density_per_100m2: 0.55
+  scale_min: 0.10000000149011612
+  scale_max: 0.5
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 0.8
+  semantic_label: tree_trunk
+  forbidden_masks: []
+  lidar_visible: true
+  align_to_surface: false
+- name: Bush
+  density_per_100m2: 0.10000000149011612
+  scale_min: 0.10000000149011612
+  scale_max: 0.20000000298023224
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 0.25
+  semantic_label: bush
+  align_to_surface: true
+  forbidden_masks: []
+  lidar_visible: true
+- name: Blueberry
+  density_per_100m2: 0.0010000000474974513
+  scale_min: 0.10000000149011612
+  scale_max: 0.5
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 0.15
+  semantic_label: bush
+  align_to_surface: true
+  forbidden_masks: []
+  lidar_visible: true
+- name: Rock
+  density_per_100m2: 1.0
+  scale_min: 0.35
+  scale_max: 1.8
+  allowed_masks:
+  - boundary_buffer
+  - no_mow_zone
+  clearance_m: 0.35
+  semantic_label: rock
+  align_to_surface: true
+  forbidden_masks: []
+  lidar_visible: true
 output:
   truth_directory: ../../assets/environments/lawn_generated/offroad_lawn_01/truth

@@ -65,6 +65,19 @@ class Stage2ContractTests(unittest.TestCase):
         self.assertIn("_runtime_config", source)
         self.assertIn("export_truth", source)
 
+    def test_ui_documents_units_and_deterministic_seed(self):
+        source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
+        for label in (
+            "Random Seed (deterministic)",
+            "Density (instances/100 m²)",
+            "Min Scale (multiplier)",
+            "Max Scale (multiplier)",
+            "Boundary/Object Clearance (m)",
+            "Bare Soil Fraction (0–1)",
+            "Generated with seed=",
+        ):
+            self.assertIn(label, source)
+
     def test_headless_lifecycle_validation_is_opt_in(self):
         source = HEADLESS_SCRIPT.read_text(encoding="utf-8")
         self.assertIn('"--validate-lifecycle"', source)

@@ -19,7 +19,7 @@ from .constants import EXTENSION_NAME
 class GeneratorWindow:
     """Old-style parameter editor that still uses the stage-3 controller."""
 
-    LABEL_WIDTH = 190
+    LABEL_WIDTH = 245
 
     def __init__(self, extension_path: str, controller_getter, asset_root: str):
         self._extension_path = extension_path
@@ -185,8 +185,12 @@ class GeneratorWindow:
                 self._string("scene_name", "Scene Name", self._raw.get("scene_name", "generated_lawn"))
                 self._string("preset", "Preset", self._nested(self._raw, "scene", "preset", default=""))
                 self._string("parent_path", "Parent Path", self._raw.get("parent_path", "/World/GeneratedForest"))
-                self._int("global_seed", "Global Seed", self._raw.get("global_seed", self._raw.get("seed", 1)))
+                self._int("global_seed", "Random Seed (deterministic)", self._raw.get("global_seed", self._raw.get("seed", 1)))
                 self._string("asset_root", "Asset Root", self._raw.get("asset_root", ""))
+                ui.Label(
+                    "The same saved parameters, asset set and random seed produce the same terrain and placements.",
+                    word_wrap=True,
+                )
                 ui.Label(f"Discovered assets: {self._asset_root}", word_wrap=True)
 
     def _build_terrain(self) -> None:
@@ -198,18 +202,18 @@ class GeneratorWindow:
                 self._pair("terrain.size_m", "Area Length / Width (m)", terrain.get("size_m", (20, 20)))
                 self._float("terrain.resolution_m", "Horizontal Resolution (m)", terrain.get("resolution_m", 0.5))
                 self._float("terrain.base_height_m", "Base Height (m)", terrain.get("base_height_m", 0.0))
-                self._float("terrain.elevation_delta_m", "Max Elevation Diff (m)", terrain.get("elevation_delta_m", 1.0))
+                self._float("terrain.elevation_delta_m", "Elevation Range (m)", terrain.get("elevation_delta_m", 1.0))
                 self._float("terrain.wavelength_m", "Wavelength (m)", terrain.get("wavelength_m", 18.0))
-                self._int("terrain.octaves", "Noise Octaves", terrain.get("octaves", 4))
-                self._float("terrain.persistence", "Noise Persistence", terrain.get("persistence", 0.4))
-                self._float("terrain.lacunarity", "Noise Lacunarity", terrain.get("lacunarity", 2.0))
+                self._int("terrain.octaves", "Noise Octaves (count)", terrain.get("octaves", 4))
+                self._float("terrain.persistence", "Noise Persistence (ratio)", terrain.get("persistence", 0.4))
+                self._float("terrain.lacunarity", "Noise Lacunarity (multiplier)", terrain.get("lacunarity", 2.0))
                 self._float("terrain.slope_direction_deg", "Slope Direction (deg)", terrain.get("slope_direction_deg", 0.0))
                 self._float("terrain.slope_deg", "Requested Slope (deg)", terrain.get("slope_deg", 0.0))
                 self._float("terrain.max_slope_deg", "Max Slope (deg)", terrain.get("max_slope_deg", 15.0))
                 self._float("terrain.max_cross_slope_deg", "Max Cross Slope (deg)", terrain.get("max_cross_slope_deg", 15.0))
-                self._float("terrain.max_local_curvature_per_m", "Max Local Curvature (/m)", terrain.get("max_local_curvature_per_m", 2.0))
-                self._int("terrain.smoothing_passes", "Smoothing Passes", terrain.get("smoothing_passes", 2))
-                self._int("terrain.terrace_count", "Terrace Count", terrain.get("terrace_count", 3))
+                self._float("terrain.max_local_curvature_per_m", "Max Local Curvature (1/m)", terrain.get("max_local_curvature_per_m", 2.0))
+                self._int("terrain.smoothing_passes", "Smoothing Passes (count)", terrain.get("smoothing_passes", 2))
+                self._int("terrain.terrace_count", "Terrace Count (count)", terrain.get("terrace_count", 3))
                 self._float("terrain.transition_width_m", "Transition Width (m)", terrain.get("transition_width_m", 1.0))
                 self._string("terrain.heightmap_path", "Heightmap Path", terrain.get("heightmap_path", ""))
                 self._float("terrain.heightmap_scale_m", "Heightmap Scale (m)", terrain.get("heightmap_scale_m", 1.0))
@@ -223,8 +227,8 @@ class GeneratorWindow:
                 self._bool("regions.enabled", "Enable Regions", regions.get("enabled", True))
                 self._float("regions.boundary_buffer_m", "Boundary Buffer (m)", regions.get("boundary_buffer_m", 0.0))
                 self._float("regions.tall_grass_band_m", "Tall Grass Band (m)", regions.get("tall_grass_band_m", 0.0))
-                self._float("regions.bare_soil_fraction", "Bare Soil Fraction", regions.get("bare_soil_fraction", 0.0))
-                self._int("regions.bare_soil_patch_count", "Bare Soil Patch Count", regions.get("bare_soil_patch_count", 0))
+                self._float("regions.bare_soil_fraction", "Bare Soil Fraction (0–1)", regions.get("bare_soil_fraction", 0.0))
+                self._int("regions.bare_soil_patch_count", "Bare Soil Patches (count)", regions.get("bare_soil_patch_count", 0))
                 for index, zone in enumerate(regions.get("zones", ())):
                     with ui.CollapsableFrame(f"Zone {index + 1}: {zone.get('name', '')}", collapsed=True, height=0):
                         with ui.VStack(spacing=2, height=0):
@@ -243,20 +247,25 @@ class GeneratorWindow:
     def _build_assets(self) -> None:
         with ui.CollapsableFrame("Trees, Rocks and Ground Vegetation", collapsed=True, height=0):
             with ui.VStack(spacing=3, height=0):
+                ui.Label(
+                    "Count = density × eligible mask area / 100 m² (rounded). Scale is a unitless multiplier; "
+                    "clearance erodes mask/object boundaries and is not spacing between plants.",
+                    word_wrap=True,
+                )
                 for index, asset in enumerate(self._raw.get("assets", ())):
                     name = str(asset.get("name", f"Asset{index}"))
                     with ui.CollapsableFrame(name, collapsed=True, height=0):
                         with ui.VStack(spacing=2, height=0):
                             models = {
-                                "density": self._float(f"asset.{index}.density", "Density (/100m²)", asset.get("density_per_100m2", 0.0)),
-                                "scale_min": self._float(f"asset.{index}.scale_min", "Min Scale", asset.get("scale_min", 0.9)),
-                                "scale_max": self._float(f"asset.{index}.scale_max", "Max Scale", asset.get("scale_max", 1.1)),
-                                "clearance": self._float(f"asset.{index}.clearance", "Clearance (m)", asset.get("clearance_m", 0.0)),
-                                "allowed": self._string(f"asset.{index}.allowed", "Allowed Masks", ", ".join(asset.get("allowed_masks", ()))),
-                                "forbidden": self._string(f"asset.{index}.forbidden", "Forbidden Masks", ", ".join(asset.get("forbidden_masks", ()))),
+                                "density": self._float(f"asset.{index}.density", "Density (instances/100 m²)", asset.get("density_per_100m2", 0.0)),
+                                "scale_min": self._float(f"asset.{index}.scale_min", "Min Scale (multiplier)", asset.get("scale_min", 0.9)),
+                                "scale_max": self._float(f"asset.{index}.scale_max", "Max Scale (multiplier)", asset.get("scale_max", 1.1)),
+                                "clearance": self._float(f"asset.{index}.clearance", "Boundary/Object Clearance (m)", asset.get("clearance_m", 0.0)),
+                                "allowed": self._string(f"asset.{index}.allowed", "Allowed Masks (CSV names)", ", ".join(asset.get("allowed_masks", ()))),
+                                "forbidden": self._string(f"asset.{index}.forbidden", "Forbidden Masks (CSV names)", ", ".join(asset.get("forbidden_masks", ()))),
                                 "semantic": self._string(f"asset.{index}.semantic", "Semantic Label", asset.get("semantic_label", "")),
-                                "lidar": self._bool(f"asset.{index}.lidar", "LiDAR Visible", asset.get("lidar_visible", True)),
-                                "align": self._bool(f"asset.{index}.align", "Align to Surface", asset.get("align_to_surface", False)),
+                                "lidar": self._bool(f"asset.{index}.lidar", "LiDAR Visible (metadata)", asset.get("lidar_visible", True)),
+                                "align": self._bool(f"asset.{index}.align", "Align Rotation to Surface", asset.get("align_to_surface", False)),
                             }
                             self._asset_models.append(models)
 
@@ -469,7 +478,7 @@ class GeneratorWindow:
 
                 self._status.text = "Exporting navigation truth..."
                 await loop.run_in_executor(None, export_truth, config.output.truth_directory, config, arrays, controller.assets)
-            self._status.text = f"Generated: {counts}"
+            self._status.text = f"Generated with seed={config.seed}: {counts}"
         except Exception as exc:
             carb.log_error(f"[{EXTENSION_NAME}] generation failed: {exc}")
             if self._status:
