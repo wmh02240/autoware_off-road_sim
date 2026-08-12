@@ -171,7 +171,16 @@ class UsdSceneWriter:
                 self.stage, f"{config.parent_path}/Instances/{name}/Prototypes/{name}"
             ).GetPrim()
             prototype.GetReferences().AddReference(str(record.path))
-            prototype.SetInstanceable(True)
+            # Keep source-unit conversion on the prototype rather than folding
+            # it into each PointInstancer scale. RTX/Hydra can otherwise drop
+            # the outer scale while repeatedly rebuilding a referenced,
+            # instanceable prototype at the same path (notably for centimetre
+            # grass assets with base_scale=0.01).
+            UsdGeom.Xformable(prototype).AddScaleOp(
+                UsdGeom.XformOp.PrecisionFloat, "sourceUnits"
+            ).Set(
+                Gf.Vec3f(record.base_scale, record.base_scale, record.base_scale)
+            )
             prototype.SetCustomDataByKey("semanticLabel", semantic)
             prototype.SetCustomDataByKey("lidarVisible", asset_cfg.lidar_visible)
             instancer.GetPrototypesRel().SetTargets([prototype.GetPath()])
@@ -180,7 +189,9 @@ class UsdSceneWriter:
             instancer.CreateOrientationsAttr(
                 [Gf.Quath(float(q[0]), Gf.Vec3h(float(q[1]), float(q[2]), float(q[3]))) for q in orientations]
             )
-            instancer.CreateScalesAttr([Gf.Vec3f(float(s), float(s), float(s)) for s in scaled])
+            # Per-instance scales retain the user-facing, unitless values; the
+            # prototype owns the fixed source-unit conversion above.
+            instancer.CreateScalesAttr([Gf.Vec3f(float(s), float(s), float(s)) for s in scales])
             # Collision proxies remain simple primitives. Referenced scan meshes never
             # receive triangle-mesh collision APIs per instance.
             if record.kind in {"tree", "rock"}:

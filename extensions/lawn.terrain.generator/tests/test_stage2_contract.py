@@ -32,6 +32,14 @@ class Stage2ContractTests(unittest.TestCase):
         self.assertIn("GetPrototypesRel().SetTargets", source)
         self.assertNotIn("prototype.CreateVisibilityAttr", source)
 
+    def test_point_instancer_prototype_owns_source_unit_scale(self):
+        source = (ROOT / "lawn/terrain/generator/usd_writer.py").read_text(encoding="utf-8")
+        self.assertIn('UsdGeom.XformOp.PrecisionFloat, "sourceUnits"', source)
+        self.assertIn("Gf.Vec3f(record.base_scale, record.base_scale, record.base_scale)", source)
+        self.assertIn("for s in scales", source)
+        self.assertNotIn("prototype.SetInstanceable(True)", source)
+
+
     def test_nested_instancer_trees_use_direct_references(self):
         source = (ROOT / "lawn/terrain/generator/usd_writer.py").read_text(encoding="utf-8")
         self.assertIn('if record.kind == "tree":', source)
