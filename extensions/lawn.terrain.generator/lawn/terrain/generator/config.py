@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_TERRAIN_MODES = {"flat", "single_slope", "rolling_lawn", "terraced_lawn", "heightmap", "legacy_fbm"}
+SUPPORTED_TERRAIN_MODES = (
+    "flat",
+    "single_slope",
+    "rolling_lawn",
+    "terraced_lawn",
+    "heightmap",
+    "legacy_fbm",
+)
 SUPPORTED_ZONE_KINDS = {"no_mow_zone", "bare_soil_patch", "spawn_pad"}
 SUPPORTED_ZONE_SHAPES = {"circle", "rectangle", "polygon"}
 SUPPORTED_OBJECT_SHAPES = {"box", "cylinder"}

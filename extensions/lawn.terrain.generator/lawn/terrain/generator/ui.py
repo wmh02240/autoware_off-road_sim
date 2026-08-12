@@ -12,7 +12,7 @@ import carb
 import omni.kit.app
 import omni.ui as ui
 
-from .config import load_config
+from .config import SUPPORTED_TERRAIN_MODES, load_config
 from .constants import EXTENSION_NAME
 
 
@@ -134,6 +134,15 @@ class GeneratorWindow:
             ui.StringField(model)
         return model
 
+    def _choice(self, key: str, label: str, value: str, options: tuple[str, ...]):
+        selected = options.index(str(value)) if str(value) in options else 0
+        with ui.HStack(height=24):
+            ui.Label(label, width=self.LABEL_WIDTH)
+            combo = ui.ComboBox(selected, *options)
+        model = combo.model.get_item_value_model()
+        self._models[key] = model
+        return model
+
     def _float(self, key: str, label: str, value=0.0):
         model = ui.SimpleFloatModel(float(value))
         self._models[key] = model
@@ -198,7 +207,12 @@ class GeneratorWindow:
         spawn = terrain.get("spawn_pad", {}) or {}
         with ui.CollapsableFrame("Terrain", collapsed=False, height=0):
             with ui.VStack(spacing=3, height=0):
-                self._string("terrain.mode", "Mode", terrain.get("mode", "legacy_fbm"))
+                self._choice(
+                    "terrain.mode",
+                    "Mode",
+                    terrain.get("mode", "legacy_fbm"),
+                    SUPPORTED_TERRAIN_MODES,
+                )
                 self._pair("terrain.size_m", "Area Length / Width (m)", terrain.get("size_m", (20, 20)))
                 self._float("terrain.resolution_m", "Horizontal Resolution (m)", terrain.get("resolution_m", 0.5))
                 self._float("terrain.base_height_m", "Base Height (m)", terrain.get("base_height_m", 0.0))
@@ -315,7 +329,7 @@ class GeneratorWindow:
 
         terrain = value.setdefault("terrain", {})
         terrain.update({
-            "mode": self._models["terrain.mode"].get_value_as_string(),
+            "mode": SUPPORTED_TERRAIN_MODES[self._models["terrain.mode"].get_value_as_int()],
             "size_m": [self._models["terrain.size_m.0"].get_value_as_float(), self._models["terrain.size_m.1"].get_value_as_float()],
             "resolution_m": self._models["terrain.resolution_m"].get_value_as_float(),
             "base_height_m": self._models["terrain.base_height_m"].get_value_as_float(),

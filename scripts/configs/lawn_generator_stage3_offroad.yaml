@@ -137,7 +137,7 @@ asset_manifest:
   base_scale: 0.01
 assets:
 - name: Grass
-  density_per_100m2: 1000.0
+  density_per_100m2: 1500.0
   scale_min: 0.10000000149011612
   scale_max: 1.0
   allowed_masks:
@@ -149,7 +149,7 @@ assets:
   align_to_surface: false
   clearance_m: 0.0
 - name: ForestFloorGrass
-  density_per_100m2: 1.0
+  density_per_100m2: 100.0
   scale_min: 0.019999999552965164
   scale_max: 0.20000000298023224
   allowed_masks:
@@ -161,9 +161,9 @@ assets:
   clearance_m: 0.0
   forbidden_masks: []
 - name: TallGrassFallback
-  density_per_100m2: 1.0
+  density_per_100m2: 100.0
   scale_min: 0.009999999776482582
-  scale_max: 0.20000000298023224
+  scale_max: 0.5
   allowed_masks:
   - tall_grass_band
   - no_mow_zone
@@ -173,7 +173,7 @@ assets:
   clearance_m: 0.0
   forbidden_masks: []
 - name: Birch
-  density_per_100m2: 1.0
+  density_per_100m2: 10.0
   scale_min: 0.10000000149011612
   scale_max: 0.4000000059604645
   allowed_masks:
@@ -257,7 +257,7 @@ assets:
   forbidden_masks: []
   lidar_visible: true
 - name: Rock
-  density_per_100m2: 1.0
+  density_per_100m2: 30.0
   scale_min: 0.35
   scale_max: 1.8
   allowed_masks:

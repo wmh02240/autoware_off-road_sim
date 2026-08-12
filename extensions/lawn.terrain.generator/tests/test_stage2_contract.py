@@ -51,6 +51,15 @@ class Stage2ContractTests(unittest.TestCase):
         source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
         self.assertIn("Path(self._extension_path).resolve()", source)
 
+    def test_ui_uses_supported_terrain_mode_dropdown(self):
+        config_source = (ROOT / "lawn/terrain/generator/config.py").read_text(encoding="utf-8")
+        ui_source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
+        self.assertIn("SUPPORTED_TERRAIN_MODES = (", config_source)
+        self.assertIn("ui.ComboBox(selected, *options)", ui_source)
+        self.assertIn('self._choice(', ui_source)
+        self.assertIn('SUPPORTED_TERRAIN_MODES[self._models["terrain.mode"].get_value_as_int()]', ui_source)
+        self.assertNotIn('self._string("terrain.mode"', ui_source)
+
     def test_ui_exposes_interactive_stage3_editor(self):
         source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
         for label in (
