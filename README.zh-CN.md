@@ -75,8 +75,7 @@ cd autoware_off-road_sim
 进入 Isaac Sim 6.0.0 容器后，生成并验证非破坏性的兼容层：
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh \
-  scripts/tools/prepare_lariad_scenes.py
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/prepare_lariad_scenes.py
 ```
 
 生成的 `easy.usda`、`medium.usda` 和 `hard.usda` 文件会写入已忽略的 `external_assets/lariad_offroad_nav/compat/` 目录。该脚本会移除嵌入的 Barakuda 和损坏的 `block.usd` payload，重写旧版资产路径，补充 `defaultPrim`、米制/Z 轴向上的元数据，并验证环境中不含 `PhysicsScene`。它绝不会修改上游二进制 USD 文件。可使用 `--check` 在不重新生成文件的情况下再次运行验证。
@@ -118,12 +117,9 @@ cd autoware_off-road_sim
 LARIAD 第一阶段单车冒烟测试配置如下：
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
-  --config scripts/configs/lariad_easy.yaml
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
-  --config scripts/configs/lariad_medium.yaml
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py \
-  --config scripts/configs/lariad_hard.yaml
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py --config scripts/configs/lariad_easy.yaml
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py --config scripts/configs/lariad_medium.yaml
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_lawn_mower_sim.py --config scripts/configs/lariad_hard.yaml
 ```
 
 `launch_lawn_mower_sim.py` 是一个专用启动器副本。草坪/LARIAD 特有行为被隔离在其中；原始的 `launch_sim.py` 及其现有环境启动行为保持不变。不使用 `--config` 时，该专用启动器默认使用 `lariad_easy.yaml`。
@@ -145,8 +141,7 @@ LARIAD 第一阶段单车冒烟测试配置如下：
 添加 `--headless` 可在没有显示窗口的情况下运行模拟器。这适用于**分布式模式与硬件在环测试**、**CI 流水线**以及未连接显示器的**远程/服务器部署**。
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_sim.py \
-  --config scripts/configs/pumptrack_simple_config.yaml --headless
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/launch_sim.py --config scripts/configs/pumptrack_simple_config.yaml --headless
 ```
 
 **与普通模式的区别：**
@@ -166,8 +161,7 @@ LARIAD 第一阶段单车冒烟测试配置如下：
 启动后可立即向车辆发布命令：
 
 ```bash
-ros2 topic pub --rate 15 /ego/control autoware_control_msgs/msg/Control \
-  '{longitudinal: {velocity: 2.0, acceleration: 1.0}, lateral: {steering_tire_angle: 0.5}}'
+ros2 topic pub --rate 15 /ego/control autoware_control_msgs/msg/Control '{longitudinal: {velocity: 2.0, acceleration: 1.0}, lateral: {steering_tire_angle: 0.5}}'
 ```
 
 所有传感器（`/ego/imu`、`/ego/odom`、`/ego/point_cloud`、`/ego/gnss` 等）都会继续正常发布。
@@ -201,22 +195,18 @@ ros2 topic pub --rate 15 /ego/control autoware_control_msgs/msg/Control \
 ```bash
 ./scripts/tools/fetch_lariad_assets.sh
 ./scripts/tools/install_lawn_generator.sh
-/root/isaacsim/_build/linux-x86_64/release/isaac-sim.sh \
-  --ext-folder /workspace/autoware-off-road_sim/extensions \
-  --enable lawn.terrain.generator
+/root/isaacsim/_build/linux-x86_64/release/isaac-sim.sh --ext-folder /workspace/autoware-off-road_sim/extensions --enable lawn.terrain.generator
 ```
 
 安装程序只会在 Isaac Sim 的 `release/exts` 文件夹下创建符号链接。这可确保 Full 应用在冷启动依赖解析期间找到该扩展。重复运行安装程序是安全的。
 
 打开 **Window > Lawn Terrain Generator**。资产发现功能会检查每个注册表项并报告不可用资产；在固定的公开检出版本中，`Switchgrass` 和 `Container` 会被禁用并显示警告。需要时可通过 `--/exts/lawn.terrain.generator/assetRoot=/absolute/path/to/data` 覆盖外部数据根目录。该窗口提供与上游类似的可滚动参数编辑器。使用 **Load Config** 从 YAML/JSON 填充控件，以交互方式编辑地形、区域、资产、表面、光照和真值输出，然后选择 **Generate All**。**Save Config** 会验证并持久化当前控件；生成本身不要求预先保存。
+其中 **Config** 提供 YAML/JSON 文件选择器，**Truth Directory** 提供真值输出目录选择器；两个路径仍可直接编辑。
 
 同一生成器可以从 YAML 以无头方式运行，无需点击 UI：
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh \
-  scripts/tools/generate_lawn_scene.py \
-  --config scripts/configs/lawn_generator_stage2.yaml \
-  --output /tmp/lawn_generator_stage2.usda
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/generate_lawn_scene.py --config scripts/configs/lawn_generator_stage2.yaml --output /tmp/lawn_generator_stage2.usda
 ```
 
 阶段 3 增加了面向割草机的地形模式、坡度约束、作业/禁割区域、区域感知植被、业务对象和导航真值。UI 默认打开 Offroad-Nav 森林草坪预设。该预设将受约束的割草机作业区与固定版本的上游森林 PBR 纹理、HDRI、混合树木、林下植被和苔藓岩石结合起来。可在现有容器中以无头方式生成：
@@ -241,6 +231,8 @@ ros2 topic pub --rate 15 /ego/control autoware_control_msgs/msg/Control \
 | `legacy_fbm` | 与阶段 2 配置兼容的程序化噪声地形 |
 
 高度图支持 `.npy`、`.csv`、`.txt`，以及当前 Isaac Sim 环境中的 Pillow 所支持的图像格式。还可以配置坡度、横坡、局部曲率、平滑次数，以及车辆出生点周围的平坦区域。
+
+各模式使用独立的缺省参数。在 UI 中切换 **Mode** 时会同步应用该模式的建议参数（例如 `single_slope` 会采用非零坡度），避免沿用上一模式的零坡度或起伏幅值而生成相同高度场；从 YAML/JSON 加载时，文件中显式填写的参数仍保持不变。
 
 **内置植物与自然物体模型**
 

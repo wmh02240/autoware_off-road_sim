@@ -58,6 +58,8 @@ class Stage2ContractTests(unittest.TestCase):
         self.assertIn("ui.ComboBox(selected, *options)", ui_source)
         self.assertIn('self._choice(', ui_source)
         self.assertIn('SUPPORTED_TERRAIN_MODES[self._models["terrain.mode"].get_value_as_int()]', ui_source)
+        self.assertIn("mode_model.add_value_changed_fn(self._terrain_mode_changed)", ui_source)
+        self.assertIn("TERRAIN_MODE_DEFAULTS[mode]", ui_source)
         self.assertNotIn('self._string("terrain.mode"', ui_source)
 
     def test_ui_exposes_interactive_stage3_editor(self):
@@ -81,6 +83,16 @@ class Stage2ContractTests(unittest.TestCase):
         self.assertIn("ui.VStack(height=92", source)
         self.assertIn("_runtime_config", source)
         self.assertIn("export_truth", source)
+
+    def test_ui_uses_path_pickers_for_config_and_truth_directory(self):
+        source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
+        manifest = (ROOT / "config/extension.toml").read_text(encoding="utf-8")
+        self.assertIn("from omni.kit.window.filepicker import FilePickerDialog", source)
+        self.assertIn('ui.Button("Browse…", width=72, clicked_fn=self._browse_config)', source)
+        self.assertIn("self._browse_truth_directory", source)
+        self.assertIn("Config Files (*.yaml, *.yml, *.json)", source)
+        self.assertIn('self._path_picker.set_filebar_label_name("Folder Name")', source)
+        self.assertIn('"omni.kit.window.filepicker" = {}', manifest)
 
     def test_ui_documents_units_and_deterministic_seed(self):
         source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")

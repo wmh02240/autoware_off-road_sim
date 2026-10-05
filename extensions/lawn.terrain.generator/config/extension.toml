@@ -12,6 +12,7 @@ changelog = "docs/CHANGELOG.md"
 [dependencies]
 "omni.kit.uiapp" = {}
 "omni.kit.menu.utils" = {}
+"omni.kit.window.filepicker" = {}
 "omni.usd" = {}
 "omni.usd.schema.physx" = {}
 "omni.physx" = {}

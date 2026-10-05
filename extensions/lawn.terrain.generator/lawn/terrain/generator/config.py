@@ -14,6 +14,22 @@ SUPPORTED_TERRAIN_MODES = (
     "heightmap",
     "legacy_fbm",
 )
+TERRAIN_MODE_DEFAULTS = {
+    # Keep flat lawns effectively level while retaining the documented option
+    # for centimetre-scale micro relief.
+    "flat": {"elevation_delta_m": 0.03, "slope_deg": 0.0},
+    "single_slope": {"elevation_delta_m": 0.03, "slope_deg": 6.0},
+    "rolling_lawn": {"elevation_delta_m": 1.0, "slope_deg": 0.0, "wavelength_m": 18.0},
+    "terraced_lawn": {
+        "elevation_delta_m": 1.0,
+        "slope_deg": 0.0,
+        "terrace_count": 3,
+        "transition_width_m": 1.0,
+    },
+    "heightmap": {"elevation_delta_m": 0.0, "slope_deg": 0.0, "heightmap_scale_m": 1.0},
+    # These values preserve the stage-2 deterministic fBm path.
+    "legacy_fbm": {"elevation_delta_m": 1.0, "slope_deg": 0.0},
+}
 SUPPORTED_ZONE_KINDS = {"no_mow_zone", "bare_soil_patch", "spawn_pad"}
 SUPPORTED_ZONE_SHAPES = {"circle", "rectangle", "polygon"}
 SUPPORTED_OBJECT_SHAPES = {"box", "cylinder"}
@@ -192,6 +208,7 @@ def _load_terrain(source: dict[str, Any], config_dir: Path) -> TerrainConfig:
     mode = str(source.get("mode", "legacy_fbm"))
     if mode not in SUPPORTED_TERRAIN_MODES:
         raise ValueError(f"unsupported terrain.mode: {mode}")
+    mode_defaults = TERRAIN_MODE_DEFAULTS[mode]
     spawn_source = source.get("spawn_pad", {}) or {}
     spawn = SpawnPadConfig(
         _pair(spawn_source.get("center_m", (0.0, 0.0)), "terrain.spawn_pad.center_m"),
@@ -207,23 +224,37 @@ def _load_terrain(source: dict[str, Any], config_dir: Path) -> TerrainConfig:
     return TerrainConfig(
         size_m=size,
         resolution_m=resolution,
-        elevation_delta_m=max(0.0, float(source.get("elevation_delta_m", source.get("max_elevation_delta_m", 1.0)))),
+        elevation_delta_m=max(
+            0.0,
+            float(
+                source.get(
+                    "elevation_delta_m",
+                    source.get("max_elevation_delta_m", mode_defaults["elevation_delta_m"]),
+                )
+            ),
+        ),
         octaves=max(1, int(source.get("octaves", 4))),
         persistence=float(source.get("persistence", 0.4)),
         lacunarity=max(1.0, float(source.get("lacunarity", 2.0))),
         mode=mode,
         base_height_m=float(source.get("base_height_m", 0.0)),
         slope_direction_deg=float(source.get("slope_direction_deg", 0.0)),
-        slope_deg=float(source.get("slope_deg", 0.0)),
+        slope_deg=float(source.get("slope_deg", mode_defaults["slope_deg"])),
         max_slope_deg=maximum_slope,
         max_cross_slope_deg=maximum_cross_slope,
         max_local_curvature_per_m=max(0.0, float(source.get("max_local_curvature_per_m", 2.0))),
         smoothing_passes=max(0, int(source.get("smoothing_passes", 2))),
-        wavelength_m=max(resolution * 2, float(source.get("wavelength_m", 18.0))),
-        terrace_count=max(1, int(source.get("terrace_count", 3))),
-        transition_width_m=max(0.0, float(source.get("transition_width_m", 1.0))),
+        wavelength_m=max(resolution * 2, float(source.get("wavelength_m", mode_defaults.get("wavelength_m", 18.0)))),
+        terrace_count=max(1, int(source.get("terrace_count", mode_defaults.get("terrace_count", 3)))),
+        transition_width_m=max(
+            0.0,
+            float(source.get("transition_width_m", mode_defaults.get("transition_width_m", 1.0))),
+        ),
         heightmap_path=heightmap_path,
-        heightmap_scale_m=max(0.0, float(source.get("heightmap_scale_m", 1.0))),
+        heightmap_scale_m=max(
+            0.0,
+            float(source.get("heightmap_scale_m", mode_defaults.get("heightmap_scale_m", 1.0))),
+        ),
         spawn_pad=spawn,
     )
 

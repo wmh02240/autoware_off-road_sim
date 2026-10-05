@@ -11,8 +11,9 @@ from pathlib import Path
 import carb
 import omni.kit.app
 import omni.ui as ui
+from omni.kit.window.filepicker import FilePickerDialog
 
-from .config import SUPPORTED_TERRAIN_MODES, load_config
+from .config import SUPPORTED_TERRAIN_MODES, TERRAIN_MODE_DEFAULTS, load_config
 from .constants import EXTENSION_NAME
 
 
@@ -28,6 +29,7 @@ class GeneratorWindow:
         self._window = None
         self._task = None
         self._status = None
+        self._path_picker = None
         self._config_model = None
         self._models: dict[str, ui.AbstractValueModel] = {}
         self._asset_models: list[dict[str, ui.AbstractValueModel]] = []
@@ -119,6 +121,7 @@ class GeneratorWindow:
             ui.Label("Config", width=60)
             self._config_model = ui.SimpleStringModel(str(self._config_path))
             ui.StringField(self._config_model)
+            ui.Button("Browse…", width=72, clicked_fn=self._browse_config)
         with ui.HStack(height=30, spacing=5):
             ui.Button("Load Config", clicked_fn=self._reload)
             ui.Button("Save Config", clicked_fn=self._save)
@@ -188,6 +191,78 @@ class GeneratorWindow:
                 ui.FloatField(model)
         return models
 
+    @staticmethod
+    def _config_path_filter(item) -> bool:
+        if not item or item.is_folder:
+            return True
+        return Path(item.path).suffix.lower() in {".yaml", ".yml", ".json"}
+
+    def _close_path_picker(self) -> None:
+        if self._path_picker is None:
+            return
+        picker = self._path_picker
+        self._path_picker = None
+        picker.hide()
+
+        async def deferred_destroy() -> None:
+            await omni.kit.app.get_app().next_update_async()
+            picker.destroy()
+
+        asyncio.ensure_future(deferred_destroy())
+
+    def _browse_config(self) -> None:
+        self._close_path_picker()
+
+        def selected(filename: str, dirname: str) -> None:
+            if filename:
+                self._config_model.set_value(str(Path(dirname) / filename))
+            self._close_path_picker()
+
+        self._path_picker = FilePickerDialog(
+            "Select Generator Configuration",
+            allow_multi_selection=False,
+            apply_button_label="Select",
+            click_apply_handler=selected,
+            click_cancel_handler=lambda _filename, _dirname: self._close_path_picker(),
+            item_filter_fn=self._config_path_filter,
+            item_filter_options=["Config Files (*.yaml, *.yml, *.json)"],
+            file_extension_options=[
+                (".yaml", "YAML Configuration"),
+                (".yml", "YAML Configuration"),
+                (".json", "JSON Configuration"),
+            ],
+        )
+
+    def _browse_truth_directory(self) -> None:
+        self._close_path_picker()
+
+        def selected(filename: str, dirname: str) -> None:
+            directory = Path(dirname)
+            selected_path = directory / filename if filename else directory
+            if filename and (selected_path.is_dir() or not selected_path.suffix):
+                directory = selected_path
+            self._models["output.truth_directory"].set_value(str(directory))
+            self._close_path_picker()
+
+        self._path_picker = FilePickerDialog(
+            "Select Navigation Truth Directory",
+            allow_multi_selection=False,
+            apply_button_label="Select Folder",
+            click_apply_handler=selected,
+            click_cancel_handler=lambda _filename, _dirname: self._close_path_picker(),
+            enable_file_bar=True,
+        )
+        self._path_picker.set_filebar_label_name("Folder Name")
+
+    def _path_string(self, key: str, label: str, value, browse_fn):
+        model = ui.SimpleStringModel(str(value))
+        self._models[key] = model
+        with ui.HStack(height=24, spacing=4):
+            ui.Label(label, width=self.LABEL_WIDTH)
+            ui.StringField(model)
+            ui.Button("Browse…", width=72, clicked_fn=browse_fn)
+        return model
+
     def _build_general(self) -> None:
         with ui.CollapsableFrame("General Settings", collapsed=False, height=0):
             with ui.VStack(spacing=3, height=0):
@@ -207,7 +282,7 @@ class GeneratorWindow:
         spawn = terrain.get("spawn_pad", {}) or {}
         with ui.CollapsableFrame("Terrain", collapsed=False, height=0):
             with ui.VStack(spacing=3, height=0):
-                self._choice(
+                mode_model = self._choice(
                     "terrain.mode",
                     "Mode",
                     terrain.get("mode", "legacy_fbm"),
@@ -233,6 +308,27 @@ class GeneratorWindow:
                 self._float("terrain.heightmap_scale_m", "Heightmap Scale (m)", terrain.get("heightmap_scale_m", 1.0))
                 self._pair("terrain.spawn_pad.center_m", "Spawn Pad Center (m)", spawn.get("center_m", (0, 0)))
                 self._float("terrain.spawn_pad.radius_m", "Spawn Pad Radius (m)", spawn.get("radius_m", 0.0))
+                mode_model.add_value_changed_fn(self._terrain_mode_changed)
+
+    def _terrain_mode_changed(self, model) -> None:
+        """Apply meaningful parameters when the user selects another mode.
+
+        Without this, the rolling-lawn preset's zero requested slope made
+        ``flat`` and ``single_slope`` generate the exact same heightfield.
+        Explicit YAML values are still retained when a config is loaded; these
+        defaults apply only to an interactive mode change.
+        """
+        index = model.get_value_as_int()
+        if not 0 <= index < len(SUPPORTED_TERRAIN_MODES):
+            return
+        mode = SUPPORTED_TERRAIN_MODES[index]
+        for name, value in TERRAIN_MODE_DEFAULTS[mode].items():
+            key = f"terrain.{name}"
+            target = self._models.get(key)
+            if target is not None:
+                target.set_value(value)
+        if self._status is not None:
+            self._status.text = f"Mode: {mode} (mode defaults applied)"
 
     def _build_regions(self) -> None:
         regions = self._raw.get("regions", {}) or {}
@@ -312,7 +408,12 @@ class GeneratorWindow:
         output = self._raw.get("output", {}) or {}
         with ui.CollapsableFrame("Output and Navigation Truth", collapsed=True, height=0):
             with ui.VStack(spacing=3, height=0):
-                self._string("output.truth_directory", "Truth Directory", output.get("truth_directory", ""))
+                self._path_string(
+                    "output.truth_directory",
+                    "Truth Directory",
+                    output.get("truth_directory", ""),
+                    self._browse_truth_directory,
+                )
 
     @staticmethod
     def _csv(value: str) -> list[str]:
@@ -427,6 +528,9 @@ class GeneratorWindow:
     def destroy(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()
+        if self._path_picker is not None:
+            self._path_picker.destroy()
+            self._path_picker = None
         self._task = None
         if self._window is not None:
             self._window.destroy()

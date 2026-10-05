@@ -10,6 +10,8 @@ scrolling, collapsible editor for general, terrain, work-region, asset, ground
 surface, lighting and navigation-truth settings. **Load Config** populates all
 controls from YAML/JSON, **Save Config** validates and writes the edited values,
 and **Generate All** uses the current controls without requiring a save first.
+The **Config** field includes a YAML/JSON file picker and **Truth Directory**
+includes a directory picker. Both selected paths remain directly editable.
 Polygon vertices, external asset manifests and business-object declarations
 that do not have dedicated controls are preserved when a config is saved.
 
@@ -40,3 +42,9 @@ Heightmaps may be `.npy`, `.csv`, `.txt`, or an image format supported by
 Pillow in the running Isaac Sim environment. Stage-2 YAML files remain
 compatible and use the original deterministic fBm path when `terrain.mode` is
 omitted.
+
+Terrain parameters have mode-specific defaults. In the interactive editor,
+changing **Mode** applies those defaults so that, for example, a newly selected
+`single_slope` receives a non-zero requested slope instead of silently reusing
+the previous mode's zero slope. Loading a YAML/JSON file still preserves every
+explicit parameter in that file.

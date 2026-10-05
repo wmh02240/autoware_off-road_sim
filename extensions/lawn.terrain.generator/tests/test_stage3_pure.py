@@ -62,6 +62,34 @@ class Stage3PureTests(unittest.TestCase):
                 self.assertTrue(np.isfinite(arrays.heights).all(), mode)
                 self.assertLessEqual(float(arrays.slope_deg.max()), 8.01, mode)
 
+    def test_minimal_terrain_modes_have_distinct_mode_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            heightmap = Path(directory) / "height.npy"
+            np.save(heightmap, np.arange(30, dtype=np.float32).reshape(5, 6))
+            heightfields = {}
+            for mode in ("flat", "single_slope", "rolling_lawn", "terraced_lawn", "heightmap"):
+                data = self._base(mode)
+                for key in (
+                    "elevation_delta_m",
+                    "slope_deg",
+                    "wavelength_m",
+                    "terrace_count",
+                    "transition_width_m",
+                    "heightmap_scale_m",
+                ):
+                    data["terrain"].pop(key, None)
+                if mode == "heightmap":
+                    data["terrain"]["heightmap_path"] = str(heightmap)
+                config = self._load(data, directory)
+                heightfields[mode] = generate_arrays(config, {"Grass", "Birch"}).heights
+                if mode == "single_slope":
+                    self.assertEqual(config.terrain.slope_deg, 6.0)
+
+            modes = tuple(heightfields)
+            for index, left in enumerate(modes):
+                for right in modes[index + 1:]:
+                    self.assertFalse(np.array_equal(heightfields[left], heightfields[right]), f"{left} == {right}")
+
     def test_masks_spawn_pad_and_region_constrained_placements(self):
         config = self._load(self._base("rolling_lawn"))
         arrays = generate_arrays(config, {"Grass", "Birch"})
