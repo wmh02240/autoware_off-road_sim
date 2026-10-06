@@ -54,9 +54,20 @@ def main():
 
     tf_cfg = config.get("tf_settings", {})
     _tf_namespace_links = bool(tf_cfg.get("namespace_links", False))
+    _tf_semantic_frames = bool(tf_cfg.get("semantic_frames", False))
+    _disable_builtin_tf = bool(tf_cfg.get("disable_builtin_transform_tree", False))
     _publish_map_to_odom = bool(tf_cfg.get("publish_map_to_odom", False))
     _map_frame_id = str(tf_cfg.get("map_frame", "map")).strip("/") or "map"
     _camera_frame_leaf = str(tf_cfg.get("camera_frame_leaf", "ZED_XM")).strip("/") or "ZED_XM"
+    _wheel_tf_rate_hz = max(1.0, float(tf_cfg.get("wheel_tf_rate_hz", 30.0)))
+
+    def _ros_frame(veh_cfg, key, default):
+        """返回车辆命名空间内的 ROS frame 名称。"""
+        leaf = str(veh_cfg.get("ros_frames", {}).get(key, default)).strip("/") or default
+        if not _tf_namespace_links:
+            return leaf
+        prefix = str(veh_cfg.get("topic_prefix", f"/{veh_cfg.get('name', 'vehicle').lower()}"))
+        return prefix.strip("/") + "/" + leaf
 
     ui_cfg = config.get("user_interface", {})
     _ui_viewport_mode = not headless_mode and bool(ui_cfg.get("viewport_mode", False))
@@ -213,7 +224,7 @@ def main():
     carb_settings.set_bool("/app/stage/generateDefaultLight", False)
 
     import omni.usd
-    from pxr import UsdGeom, Gf, Sdf
+    from pxr import Usd, UsdGeom, Gf, Sdf
     import omni.ext
 
     # 确保已有 Stage 打开
@@ -444,6 +455,297 @@ def main():
         except Exception as _lidar_mass_err:
             print(f"[Physics] OS2 LiDAR mass-property repair failed at {_lidar_sensor_path}: {_lidar_mass_err}")
 
+    # ── P0：ROS 语义坐标系、深度图和里程计修复 ────────────────────────────────
+    # 车辆资源中的 PhysX 刚体原点主要服务于 CAD/物理建模。例如 OffRoad 的四个
+    # Wheel 刚体本身都位于车体原点，轮胎依靠子 Mesh 的局部变换摆放到四角。
+    # 因此不能直接把原始刚体原点当作 ROS Link 原点。这里建立独立的语义 frame
+    # 规格，并交由 drive_bridge 发布；不修改二进制 USD 资源。
+    _semantic_tf_specs = {}
+
+    def _node_type(_prim):
+        _attr = _prim.GetAttribute("node:type")
+        return str(_attr.Get() or "") if _attr else ""
+
+    def _relative_pose(_parent_prim, _child_prim):
+        # 不直接做完整 Matrix 逆乘：车辆资源内部含 cm->m 缩放层，完整逆乘会把
+        # 平移恢复到源 CAD 单位。世界坐标差本身已是米，再旋转回父坐标即可。
+        _parent_world = omni.usd.get_world_transform_matrix(_parent_prim)
+        _child_world = omni.usd.get_world_transform_matrix(_child_prim)
+        _parent_pos = _parent_world.ExtractTranslation()
+        _child_pos = _child_world.ExtractTranslation()
+        _parent_rot = _parent_world.ExtractRotation()
+        _child_rot = _child_world.ExtractRotation()
+        _local_pos = _parent_rot.GetInverse().TransformDir(_child_pos - _parent_pos)
+        # USD 行向量组合满足 child_rot = local_rot * parent_rot。
+        _local_rot = _child_rot * _parent_rot.GetInverse()
+        _local_quat = _local_rot.GetQuat()
+        _local_imag = _local_quat.GetImaginary()
+        return (
+            float(_local_pos[0]), float(_local_pos[1]), float(_local_pos[2]),
+            float(_local_imag[0]), float(_local_imag[1]), float(_local_imag[2]),
+            float(_local_quat.GetReal()),
+        )
+
+    for _p0_veh in vehicles:
+        if not _p0_veh.get("enabled", True):
+            continue
+        _p0_name = _p0_veh.get("name", "Vehicle")
+        _p0_root = f"/World/{_p0_name}"
+        _p0_prefix = "/" + _p0_veh.get(
+            "topic_prefix", f"/{_p0_name.lower()}"
+        ).strip("/")
+        _p0_base_frame = _ros_frame(_p0_veh, "base_link", "base_link")
+        _p0_footprint_frame = _ros_frame(
+            _p0_veh, "base_footprint", "base_footprint")
+        _p0_chassis_frame = _ros_frame(_p0_veh, "chassis", "chassis_link")
+        _p0_camera_frame = _ros_frame(_p0_veh, "camera", "camera_frame")
+        _p0_camera_optical = _ros_frame(
+            _p0_veh, "camera_optical", "camera_optical_frame")
+        _p0_imu_frame = _ros_frame(_p0_veh, "imu", "imu_link")
+        _p0_lidar_frame = _ros_frame(_p0_veh, "lidar", "lidar_link")
+
+        _p0_chassis = None
+        for _candidate in stage.Traverse():
+            _candidate_path = _candidate.GetPath().pathString
+            if (_candidate_path.startswith(_p0_root)
+                    and _candidate_path.endswith("/Rigid_Bodies/Chassis")):
+                _p0_chassis = _candidate
+                break
+        if _p0_chassis is None or not _p0_chassis.IsValid():
+            print(f"[P0 TF] {_p0_name}: missing Chassis prim; semantic TF skipped")
+            continue
+        _p0_model_root = _p0_chassis.GetPath().pathString.removesuffix(
+            "/Rigid_Bodies/Chassis")
+
+        _p0_render_products = []
+        _p0_camera_prim = None
+        _p0_imu_prim = None
+        _p0_lidar_prim = None
+        _p1_camera_prims = []
+        _p1_imu_prims = []
+        _p1_lidar_prims = []
+        _p1_wheel_meshes = {}
+
+        for _p0_prim in stage.Traverse():
+            _p0_path = _p0_prim.GetPath().pathString
+            if not _p0_path.startswith(_p0_root):
+                continue
+            _p0_ntype = _node_type(_p0_prim)
+
+            # P1：收集模型中真实存在的全部传感器和轮胎视觉 Mesh。轮胎刚体
+            # 原点不能作为轮轴中心，因此必须使用其子 Mesh 的实时世界姿态。
+            if _p0_prim.IsA(UsdGeom.Camera):
+                _p1_camera_prims.append(_p0_prim)
+            if _p0_prim.GetTypeName() == "IsaacImuSensor":
+                _p1_imu_prims.append(_p0_prim)
+            if "OmniLidar" in _p0_prim.GetTypeName():
+                _p1_lidar_prims.append(_p0_prim)
+            if (_p0_prim.IsA(UsdGeom.Mesh)
+                    and _p0_path.startswith(f"{_p0_model_root}/Rigid_Bodies/Wheel_")):
+                _p1_wheel_name = _p0_path.split("/Rigid_Bodies/", 1)[1].split("/", 1)[0]
+                _p1_wheel_meshes.setdefault(_p1_wheel_name, []).append(_p0_prim)
+
+            # 里程计必须以真实 Chassis 为数据源，而不是固定在车体上的相机刚体。
+            if "ComputeOdometry" in _p0_ntype:
+                _p0_chassis_rel = _p0_prim.GetRelationship("inputs:chassisPrim")
+                if _p0_chassis_rel:
+                    _p0_old = list(_p0_chassis_rel.GetTargets())
+                    _p0_chassis_rel.SetTargets([_p0_chassis.GetPath()])
+                    print(f"[P0 Odom] {_p0_name}: {_p0_path} chassisPrim "
+                          f"{_p0_old} -> {_p0_chassis.GetPath()}")
+
+            # 找出所有连接到真实相机 Prim 的有效 Render Product。
+            if "CreateRenderProduct" in _p0_ntype:
+                _p0_cam_rel = _p0_prim.GetRelationship("inputs:cameraPrim")
+                _p0_cams = list(_p0_cam_rel.GetTargets()) if _p0_cam_rel else []
+                if len(_p0_cams) == 1 and stage.GetPrimAtPath(_p0_cams[0]).IsValid():
+                    _p0_output = _p0_prim.GetAttribute("outputs:renderProductPath")
+                    if _p0_output:
+                        _p0_render_products.append(_p0_output.GetPath())
+                        if _p0_camera_prim is None:
+                            _p0_camera_prim = stage.GetPrimAtPath(_p0_cams[0])
+
+            if "ReadIMU" in _p0_ntype:
+                _p0_imu_rel = _p0_prim.GetRelationship("inputs:imuPrim")
+                _p0_imus = list(_p0_imu_rel.GetTargets()) if _p0_imu_rel else []
+                if len(_p0_imus) == 1 and stage.GetPrimAtPath(_p0_imus[0]).IsValid():
+                    _p0_imu_prim = stage.GetPrimAtPath(_p0_imus[0])
+
+            if "PublishTransformTree" in _p0_ntype and _disable_builtin_tf:
+                # 该 Isaac Sim 版本的 TransformTree 会忽略运行时 enabled=false。
+                # 在 OmniGraph 编译前将 Prim 停用，才能保证错误的 CAD 刚体 TF
+                # 不再发布。覆盖只存在于组合 Stage，不会修改源 USD。
+                _p0_exec = _p0_prim.GetAttribute("inputs:execIn")
+                if _p0_exec:
+                    _p0_exec.SetConnections([])
+                _p0_prim.SetActive(False)
+                print(f"[P0 TF] {_p0_name}: disabled invalid built-in TransformTree {_p0_path}")
+
+            if _p0_prim.GetTypeName() == "IsaacImuSensor" and _p0_imu_prim is None:
+                _p0_imu_prim = _p0_prim
+            if "OmniLidar" in _p0_prim.GetTypeName():
+                _p0_lidar_prim = _p0_prim
+
+        # 深度 Helper 只允许连接一个有效 Render Product。源 OffRoad USD 中还保留了
+        # 指向不存在 isaac_create_render_product_01 的悬空连接，这会导致深度图异常。
+        if _p0_render_products:
+            _p0_valid_render = _p0_render_products[0]
+            for _p0_prim in stage.Traverse():
+                _p0_path = _p0_prim.GetPath().pathString
+                if not _p0_path.startswith(_p0_root):
+                    continue
+                _p0_ntype = _node_type(_p0_prim)
+                if "Camera" not in _p0_ntype or "Helper" not in _p0_ntype:
+                    continue
+                _p0_type_attr = _p0_prim.GetAttribute("inputs:type")
+                _p0_topic_attr = _p0_prim.GetAttribute("inputs:topicName")
+                _p0_kind = str(_p0_type_attr.Get() or "") if _p0_type_attr else ""
+                _p0_topic = str(_p0_topic_attr.Get() or "") if _p0_topic_attr else ""
+                _p0_render_attr = _p0_prim.GetAttribute("inputs:renderProductPath")
+                if _p0_render_attr and (_p0_kind == "depth" or _p0_topic.strip("/") == "depth"):
+                    _p0_old_connections = list(_p0_render_attr.GetConnections())
+                    _p0_render_attr.SetConnections([_p0_valid_render])
+                    print(f"[P0 Depth] {_p0_name}: {_p0_path} render product "
+                          f"{_p0_old_connections} -> [{_p0_valid_render}]")
+                _p0_frame_attr = _p0_prim.GetAttribute("inputs:frameId")
+                if _p0_frame_attr:
+                    _p0_frame_attr.Set(_p0_camera_optical)
+
+        # IMU 和 LiDAR 消息使用各自的真实传感器 frame，而不是 base_link。
+        for _p0_prim in stage.Traverse():
+            _p0_path = _p0_prim.GetPath().pathString
+            if not _p0_path.startswith(_p0_root):
+                continue
+            _p0_ntype = _node_type(_p0_prim)
+            _p0_frame_attr = _p0_prim.GetAttribute("inputs:frameId")
+            if not _p0_frame_attr:
+                continue
+            if "PublishImu" in _p0_ntype:
+                _p0_frame_attr.Set(_p0_imu_frame)
+            elif "LidarHelper" in _p0_ntype:
+                _p0_frame_attr.Set(_p0_lidar_frame)
+
+        # 根据轮胎世界包围盒下边界推导 base_footprint；base_link 定义在 Chassis
+        # 原点。这样不会把出生高度或 CAD 根节点偏移误认为底盘离地高度。
+        _p0_ground_z = None
+        try:
+            _p0_bbox_cache = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+            for _p0_prim in stage.Traverse():
+                _p0_path = _p0_prim.GetPath().pathString
+                if (not _p0_path.startswith(f"{_p0_model_root}/Rigid_Bodies/Wheel_")
+                        or not _p0_prim.IsA(UsdGeom.Mesh)):
+                    continue
+                _p0_min_z = float(
+                    _p0_bbox_cache.ComputeWorldBound(_p0_prim)
+                    .ComputeAlignedBox().GetMin()[2])
+                _p0_ground_z = _p0_min_z if _p0_ground_z is None else min(
+                    _p0_ground_z, _p0_min_z)
+        except Exception as _p0_bbox_err:
+            print(f"[P0 TF] {_p0_name}: wheel ground detection failed: {_p0_bbox_err}")
+
+        _p0_chassis_z = float(
+            omni.usd.get_world_transform_matrix(_p0_chassis).ExtractTranslation()[2])
+        _p0_base_height = max(0.0, _p0_chassis_z - _p0_ground_z) \
+            if _p0_ground_z is not None else 0.0
+
+        _p0_static = [
+            (_p0_footprint_frame, _p0_base_frame,
+             (0.0, 0.0, _p0_base_height, 0.0, 0.0, 0.0, 1.0)),
+            (_p0_base_frame, _p0_chassis_frame,
+             (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)),
+        ]
+        _p1_static_children = {_p0_base_frame, _p0_chassis_frame}
+
+        def _p1_add_static(_parent, _child, _pose):
+            if not _child or _child in _p1_static_children:
+                return
+            _p0_static.append((_parent, _child, _pose))
+            _p1_static_children.add(_child)
+
+        # 为每个相机建立 mount frame 和 optical frame。当前实际发布图像的相机
+        # 沿用 camera/camera_optical 配置；其余相机按名称映射到独立 frame。
+        for _p1_camera in _p1_camera_prims:
+            _p1_camera_path = _p1_camera.GetPath().pathString
+            _p1_camera_name = _p1_camera.GetName().lower()
+            if (_p0_camera_prim is not None
+                    and _p1_camera_path == _p0_camera_prim.GetPath().pathString):
+                _p1_camera_key, _p1_optical_key = "camera", "camera_optical"
+                _p1_camera_default, _p1_optical_default = "camera_frame", "camera_optical_frame"
+            elif "right" in _p1_camera_name:
+                _p1_camera_key, _p1_optical_key = "camera_right", "camera_right_optical"
+                _p1_camera_default, _p1_optical_default = "camera_right_frame", "camera_right_optical_frame"
+            elif "left" in _p1_camera_name:
+                _p1_camera_key, _p1_optical_key = "camera_left", "camera_left_optical"
+                _p1_camera_default, _p1_optical_default = "camera_left_frame", "camera_left_optical_frame"
+            elif "depth" in _p1_camera_name:
+                _p1_camera_key, _p1_optical_key = "camera_depth", "camera_depth_optical"
+                _p1_camera_default, _p1_optical_default = "camera_depth_frame", "camera_depth_optical_frame"
+            else:
+                _p1_camera_key, _p1_optical_key = "camera_color", "camera_color_optical"
+                _p1_camera_default, _p1_optical_default = "camera_color_frame", "camera_color_optical_frame"
+            _p1_camera_frame = _ros_frame(_p0_veh, _p1_camera_key, _p1_camera_default)
+            _p1_optical_frame = _ros_frame(_p0_veh, _p1_optical_key, _p1_optical_default)
+            _p1_add_static(
+                _p0_base_frame, _p1_camera_frame,
+                _relative_pose(_p0_chassis, _p1_camera))
+            # USD Camera：+X 向右、+Y 向上、-Z 向前；ROS optical：+X 向右、
+            # +Y 向下、+Z 向前，因此需要绕 X 轴旋转 180°。
+            _p1_add_static(
+                _p1_camera_frame, _p1_optical_frame,
+                (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0))
+
+        for _p1_imu in _p1_imu_prims:
+            _p1_imu_path = _p1_imu.GetPath().pathString
+            _p1_is_active = (_p0_imu_prim is not None
+                             and _p1_imu_path == _p0_imu_prim.GetPath().pathString)
+            _p1_imu_frame = (_p0_imu_frame if _p1_is_active else
+                             _ros_frame(_p0_veh, "realsense_imu", "realsense_imu_link"))
+            _p1_add_static(
+                _p0_base_frame, _p1_imu_frame,
+                _relative_pose(_p0_chassis, _p1_imu))
+
+        for _p1_lidar in _p1_lidar_prims:
+            _p1_add_static(
+                _p0_base_frame, _p0_lidar_frame,
+                _relative_pose(_p0_chassis, _p1_lidar))
+
+        _p1_wheel_key_map = {
+            "Wheel_Front_Left": "front_left_wheel",
+            "Wheel_Front_Right": "front_right_wheel",
+            "Wheel_Rear_Left": "rear_left_wheel",
+            "Wheel_Rear_Right": "rear_right_wheel",
+        }
+        _p1_wheels = []
+        for _p1_wheel_name, _p1_wheel_key in _p1_wheel_key_map.items():
+            _p1_candidates = _p1_wheel_meshes.get(_p1_wheel_name, [])
+            if not _p1_candidates:
+                print(f"[P1 TF] {_p0_name}: missing visual Mesh for {_p1_wheel_name}")
+                continue
+            # 选择层级最浅的 Mesh；它是承载轮胎中心变换的视觉根 Mesh。
+            _p1_wheel_prim = min(
+                _p1_candidates,
+                key=lambda _prim: (_prim.GetPath().pathString.count("/"),
+                                   _prim.GetPath().pathString),
+            )
+            _p1_wheel_frame = _ros_frame(
+                _p0_veh, _p1_wheel_key, f"{_p1_wheel_key}_link")
+            _p1_wheels.append((_p1_wheel_frame, _p1_wheel_prim))
+
+        _semantic_tf_specs[_p0_name] = {
+            "odom_topic": _p0_prefix + "/odom",
+            "odom_frame": _ros_frame(_p0_veh, "odom", "odom"),
+            "footprint_frame": _p0_footprint_frame,
+            "base_frame": _p0_base_frame,
+            "base_height": _p0_base_height,
+            "static": _p0_static,
+            "chassis_prim": _p0_chassis,
+            "wheels": _p1_wheels,
+        }
+        print(f"[P1 TF] {_p0_name}: semantic frames prepared; "
+              f"base_link height={_p0_base_height:.6f} m, "
+              f"static TFs={len(_p0_static)}, dynamic wheels={len(_p1_wheels)}")
+
     # 应用配置中的 PhysicsScene 覆盖
     physics_opts = config.get("physics_settings", {})
     if physics_opts:
@@ -586,7 +888,7 @@ def main():
         # TF 发布器根据 USD Prim 名称而不是 ROS 发布器的 frameId 属性推导
         # Articulation 坐标系名称。在组合 Stage 层级为每个刚体 Link 添加前缀，
         # 使里程计和 Articulation TF 使用相同的车辆坐标系命名空间；源 USD 保持不变。
-        if _tf_namespace_links:
+        if _tf_namespace_links and not _tf_semantic_frames:
             try:
                 from pxr import UsdPhysics
                 _tf_override_count = 0
@@ -632,10 +934,8 @@ def main():
                     if node_type and "Camera" in node_type and "Helper" in node_type:
                         _cam_fid_attr = prim.GetAttribute("inputs:frameId")
                         if _cam_fid_attr:
-                            _camera_frame_id = (
-                                topic_prefix.strip("/") + "/" + _camera_frame_leaf
-                                if _tf_namespace_links else _camera_frame_leaf
-                            )
+                            _camera_frame_id = _ros_frame(
+                                veh, "camera_optical", _camera_frame_leaf)
                             _cam_fid_attr.Set(_camera_frame_id)
                             remapped_count += 1
                             print(f"[ROS2 setup] {veh_name}: camera frame -> '{_camera_frame_id}'")
@@ -1048,15 +1348,26 @@ def main():
             _drive_proc.stdin.write(_cmd)
             # 车辆 USD 会发布 Odometry 消息，但不会发布对应的 odom -> base_link 变换。
             # 注册一个桥接订阅器，使用相同坐标系名称将里程计位姿同步到 /tf。
-            _odom_parent = (
-                _vp.strip("/") + "/odom" if _tf_namespace_links else "odom"
-            )
-            _odom_child = (
-                _vp.strip("/") + "/base_link" if _tf_namespace_links else "base_link"
-            )
-            _odom_tf_cmd = (
-                f"odom_tf\t{_vp}/odom\t{_odom_parent}\t{_odom_child}\n"
-            )
+            _semantic_spec = _semantic_tf_specs.get(_vn) if _tf_semantic_frames else None
+            if _semantic_spec:
+                _odom_parent = _semantic_spec["odom_frame"]
+                _odom_child = _semantic_spec["footprint_frame"]
+                # Odometry 消息描述 Chassis/base_link 位姿。先沿车辆局部 Z 轴向下
+                # 平移到底盘投影点，再由静态 base_footprint->base_link 恢复原位姿。
+                _odom_tf_cmd = (
+                    f"odom_tf\t{_vp}/odom\t{_odom_parent}\t{_odom_child}\t"
+                    f"0\t0\t{-float(_semantic_spec['base_height'])}\n"
+                )
+            else:
+                _odom_parent = (
+                    _vp.strip("/") + "/odom" if _tf_namespace_links else "odom"
+                )
+                _odom_child = (
+                    _vp.strip("/") + "/base_link" if _tf_namespace_links else "base_link"
+                )
+                _odom_tf_cmd = (
+                    f"odom_tf\t{_vp}/odom\t{_odom_parent}\t{_odom_child}\n"
+                )
             _drv_sub_cmds.append(_odom_tf_cmd)
             _drive_proc.stdin.write(_odom_tf_cmd)
         _drive_proc.stdin.write("start\n")
@@ -1091,6 +1402,19 @@ def main():
         _drv_threading.Thread(target=_drive_reader, args=(_drive_proc,), daemon=True).start()
         _ros_bridge_enabled = True
         _drv_post_cmds = []   # 地图和静态 TF 命令，重启时重新发送给新桥接进程
+
+        # 发布独立于 CAD/PhysX 原点的 ROS 语义静态坐标系。所有变换均从组合
+        # Stage 的实际 Chassis/传感器位姿计算，避免在 YAML 中重复手填外参。
+        if _tf_semantic_frames:
+            for _tf_name, _tf_spec in _semantic_tf_specs.items():
+                for _tf_parent, _tf_child, _tf_pose in _tf_spec["static"]:
+                    _tf_pose_text = "\t".join(f"{float(v):.12g}" for v in _tf_pose)
+                    _semantic_cmd = (
+                        f"tf_pose\t{_tf_parent}\t{_tf_child}\t{_tf_pose_text}\n")
+                    _drive_proc.stdin.write(_semantic_cmd)
+                    _drv_post_cmds.append(_semantic_cmd)
+                    print(f"[P0 TF] Static {_tf_parent} -> {_tf_child} ({_tf_name})")
+            _drive_proc.stdin.flush()
 
         # 可选地将每辆车相对于起点的里程计坐标系锚定在仿真地图中。
         # 源 ComputeOdometry 节点报告相对初始位姿的运动，因此 map -> odom
@@ -1325,10 +1649,8 @@ def main():
 
         # 相机辅助节点的默认值可能要等图启动后才会实体化。为 RGB、深度图和
         # CameraInfo 辅助节点重新应用统一的规范坐标系，并保留该值供下方周期性防重置流程使用。
-        _camera_frame_id = (
-            topic_prefix.strip("/") + "/" + _camera_frame_leaf
-            if _tf_namespace_links else _camera_frame_leaf
-        )
+        _camera_frame_id = _ros_frame(
+            veh, "camera_optical", _camera_frame_leaf)
         _camera_fid_count = 0
         for prim in stage.Traverse():
             p_path = prim.GetPath().pathString
@@ -2377,6 +2699,7 @@ def main():
     _rt_wall_last = time.monotonic()   # 上次实时因子采样时的墙上时间（按区间计算）
     _rt_iter_last = 0                  # 上次实时因子采样时的迭代次数
     _ctrl_mode_last_pub = 0.0  # 上次周期性发布 control_mode 的墙上时间
+    _wheel_tf_frame_skip = max(1, int(round(float(app_freq) / _wheel_tf_rate_hz)))
 
     if headless_mode:
         _veh_names = list(veh_ctrl_mode.keys())
@@ -2501,6 +2824,39 @@ def main():
             _last_n_status_lines = 0
             print("[Sim] Simulation restarted.")
             continue
+
+        # P1：轮胎刚体的 USD 原点位于车体中心，不能直接发布。这里读取轮胎
+        # 视觉根 Mesh 的实时姿态，以 chassis/base_link 为父坐标系发布动态 TF。
+        # 视觉 Mesh 原点位于轮轴中心，并会继承转向与滚动关节的姿态。
+        if (_tf_semantic_frames and _ros_bridge_enabled
+                and _drive_proc is not None and _drive_proc.poll() is None
+                and iteration % _wheel_tf_frame_skip == 0):
+            try:
+                _wheel_sim_time = max(0.0, float(timeline.get_current_time()))
+                _wheel_sec = int(_wheel_sim_time)
+                _wheel_nanosec = int(round((_wheel_sim_time - _wheel_sec) * 1.0e9))
+                if _wheel_nanosec >= 1000000000:
+                    _wheel_sec += 1
+                    _wheel_nanosec -= 1000000000
+                _wheel_commands = []
+                for _wheel_spec in _semantic_tf_specs.values():
+                    _wheel_parent = _wheel_spec["base_frame"]
+                    _wheel_chassis = _wheel_spec["chassis_prim"]
+                    for _wheel_child, _wheel_prim in _wheel_spec["wheels"]:
+                        if not _wheel_prim.IsValid():
+                            continue
+                        _wheel_pose = _relative_pose(_wheel_chassis, _wheel_prim)
+                        _wheel_pose_text = "\t".join(
+                            f"{float(value):.12g}" for value in _wheel_pose)
+                        _wheel_commands.append(
+                            f"tf_dyn_pose\t{_wheel_parent}\t{_wheel_child}\t"
+                            f"{_wheel_sec}\t{_wheel_nanosec}\t{_wheel_pose_text}\n")
+                if _wheel_commands:
+                    _drive_proc.stdin.writelines(_wheel_commands)
+                    _drive_proc.stdin.flush()
+            except Exception as _wheel_tf_err:
+                if iteration % max(1, app_freq) == 0:
+                    print(f"[P1 TF] Dynamic wheel publish failed: {_wheel_tf_err}")
 
         # ── 周期性重新应用坐标系 ID ───────────────────────────────────────────
         # 图重新求值后，OmniGraph 节点可能把已写入的属性值重置为默认值。

@@ -26,10 +26,15 @@ network_setup:
 
 tf_settings:
   namespace_links: true
+  # 使用显式 ROS 语义坐标系，避免把 CAD/PhysX 刚体原点直接作为 TF 原点。
+  semantic_frames: true
+  # 原始 USD 的 TransformTree 会把四个轮子刚体原点发布在车体原点；
+  # P0 阶段先停用该错误 TF，P1 阶段再按轮轴中心重建动态车轮 TF。
+  disable_builtin_transform_tree: true
+  # 从轮胎视觉中心提取实时姿态，以较低频率发布四轮动态 TF。
+  wheel_tf_rate_hz: 30.0
   publish_map_to_odom: true
   map_frame: "map"
-  # The vehicle TF publisher already exposes this camera-body link.  RGB, depth and CameraInfo are forced to the same namespaced frame at launch.
-  camera_frame_leaf: "ZED_XM"
 
 environment:
   asset: "external_assets/lariad_offroad_nav/compat/hard.usda"
@@ -56,6 +61,25 @@ vehicles:
     enable_camera: true
     enable_lidar: true
     enable_gnss: true
+    ros_frames:
+      base_footprint: "base_footprint"
+      base_link: "base_link"
+      chassis: "chassis_link"
+      camera: "camera_color_frame"
+      camera_optical: "camera_color_optical_frame"
+      camera_left: "camera_left_frame"
+      camera_left_optical: "camera_left_optical_frame"
+      camera_right: "camera_right_frame"
+      camera_right_optical: "camera_right_optical_frame"
+      camera_depth: "camera_depth_frame"
+      camera_depth_optical: "camera_depth_optical_frame"
+      imu: "imu_link"
+      realsense_imu: "realsense_imu_link"
+      lidar: "lidar_link"
+      front_left_wheel: "front_left_wheel_link"
+      front_right_wheel: "front_right_wheel_link"
+      rear_left_wheel: "rear_left_wheel_link"
+      rear_right_wheel: "rear_right_wheel_link"
 
   - name: "Opponent_Vehicle"
     enabled: true
@@ -66,6 +90,20 @@ vehicles:
     enable_camera: true
     enable_lidar: true
     enable_gnss: true
+    ros_frames:
+      base_footprint: "base_footprint"
+      base_link: "base_link"
+      chassis: "chassis_link"
+      camera: "zed_left_camera_frame"
+      camera_optical: "zed_left_camera_optical_frame"
+      camera_right: "zed_right_camera_frame"
+      camera_right_optical: "zed_right_camera_optical_frame"
+      imu: "zed_imu_link"
+      lidar: "lidar_link"
+      front_left_wheel: "front_left_wheel_link"
+      front_right_wheel: "front_right_wheel_link"
+      rear_left_wheel: "rear_left_wheel_link"
+      rear_right_wheel: "rear_right_wheel_link"
 
 frame_ids_to_remap: ["odom", "base_link"]
 topics_to_remap:

@@ -8,11 +8,12 @@ Isaac Sim 使用 Python 3.12，但 ROS Humble 中的 rclpy 是为 Python 3.10 �
 标准输入协议（每行一条命令）：
   执行 ``start`` 之前：
     sub<TAB>veh_name<TAB>drive_topic<TAB>control_topic
-    odom_tf<TAB>odom_topic<TAB>parent_frame<TAB>child_frame
+    odom_tf<TAB>odom_topic<TAB>parent_frame<TAB>child_frame[<TAB>offset_x<TAB>offset_y<TAB>offset_z]
   执行 ``start`` 之后（延迟命令，例如物理预热完成后地图数据才就绪）：
     map<TAB>width<TAB>height<TAB>resolution<TAB>orig_x<TAB>orig_y<TAB>data_b64
     tf<TAB>parent_frame<TAB>child_frame
     tf_pose<TAB>parent_frame<TAB>child_frame<TAB>x<TAB>y<TAB>z<TAB>qx<TAB>qy<TAB>qz<TAB>qw
+    tf_dyn_pose<TAB>parent_frame<TAB>child_frame<TAB>sec<TAB>nanosec<TAB>x<TAB>y<TAB>z<TAB>qx<TAB>qy<TAB>qz<TAB>qw
     ctrl_mode<TAB>veh_name<TAB>value  -- 发布控制模式（0=KEYBOARD_CONTROL，1=ROS2_CONTROL）
 
 标准输出协议：
@@ -51,7 +52,7 @@ except Exception as _e:
     sys.stderr.write(f"[drive_bridge] tf2 buffer init skipped: {_e}\n")
 
 _pending_subs = []   # (veh_name, drive_topic, control_topic) 列表
-_pending_odom_tfs = []  # (odom_topic, parent_frame, child_frame) 列表
+_pending_odom_tfs = []  # (odom_topic, parent_frame, child_frame, ox, oy, oz) 列表
 _pending_maps = []   # 原始字段列表 [width, height, res, ox, oy, b64]
 _pending_tfs  = []   # (parent_frame, child_frame) 列表
 _pending_pose_tfs = []  # (parent, child, x, y, z, qx, qy, qz, qw) 列表
@@ -68,8 +69,9 @@ for _line in sys.stdin:
     _cmd = _parts[0]
     if _cmd == "sub" and len(_parts) == 4:
         _pending_subs.append((_parts[1], _parts[2], _parts[3]))
-    elif _cmd == "odom_tf" and len(_parts) == 4:
-        _pending_odom_tfs.append((_parts[1], _parts[2], _parts[3]))
+    elif _cmd == "odom_tf" and len(_parts) in (4, 7):
+        _offset = tuple(float(v) for v in _parts[4:7]) if len(_parts) == 7 else (0.0, 0.0, 0.0)
+        _pending_odom_tfs.append((_parts[1], _parts[2], _parts[3], *_offset))
     elif _cmd == "map" and len(_parts) == 7:
         _pending_maps.append(_parts[1:])
     elif _cmd == "tf" and len(_parts) == 3:
@@ -125,6 +127,7 @@ for _vn, _dt, _ct in _pending_subs:
 # odom -> base_link TF。将每个里程计位姿同步到 /tf，使使用方看到一棵连通的树。
 # 此处复制消息时间戳；若使用墙上时间，该变换将无法与 /clock 配合使用。
 _tf_broadcaster = None
+_tf_broadcaster_lock = threading.Lock()
 if _pending_odom_tfs:
     try:
         from tf2_ros import TransformBroadcaster
@@ -132,12 +135,12 @@ if _pending_odom_tfs:
     except Exception as _e:
         sys.stderr.write(f"[drive_bridge] dynamic TF broadcaster failed: {_e}\n")
 
-for _odom_topic, _parent_frame, _child_frame in _pending_odom_tfs:
+for _odom_topic, _parent_frame, _child_frame, _offset_x, _offset_y, _offset_z in _pending_odom_tfs:
     try:
         from nav_msgs.msg import Odometry
         from geometry_msgs.msg import TransformStamped
 
-        def _make_odom_tf_cb(parent_frame, child_frame):
+        def _make_odom_tf_cb(parent_frame, child_frame, offset):
             def _cb(msg):
                 if _tf_broadcaster is None:
                     return
@@ -145,17 +148,34 @@ for _odom_topic, _parent_frame, _child_frame in _pending_odom_tfs:
                 tf_msg.header.stamp = msg.header.stamp
                 tf_msg.header.frame_id = parent_frame
                 tf_msg.child_frame_id = child_frame
-                tf_msg.transform.translation.x = msg.pose.pose.position.x
-                tf_msg.transform.translation.y = msg.pose.pose.position.y
-                tf_msg.transform.translation.z = msg.pose.pose.position.z
+                # offset 使用车辆局部坐标。先用里程计四元数将其旋转到 odom，
+                # 再叠加位姿平移；用于从 Chassis/base_link 位姿得到 base_footprint。
+                ox, oy, oz = offset
+                q = msg.pose.pose.orientation
+                qx, qy, qz, qw = q.x, q.y, q.z, q.w
+                rx = ((1.0 - 2.0 * (qy * qy + qz * qz)) * ox
+                      + 2.0 * (qx * qy - qz * qw) * oy
+                      + 2.0 * (qx * qz + qy * qw) * oz)
+                ry = (2.0 * (qx * qy + qz * qw) * ox
+                      + (1.0 - 2.0 * (qx * qx + qz * qz)) * oy
+                      + 2.0 * (qy * qz - qx * qw) * oz)
+                rz = (2.0 * (qx * qz - qy * qw) * ox
+                      + 2.0 * (qy * qz + qx * qw) * oy
+                      + (1.0 - 2.0 * (qx * qx + qy * qy)) * oz)
+                tf_msg.transform.translation.x = msg.pose.pose.position.x + rx
+                tf_msg.transform.translation.y = msg.pose.pose.position.y + ry
+                tf_msg.transform.translation.z = msg.pose.pose.position.z + rz
                 tf_msg.transform.rotation = msg.pose.pose.orientation
-                _tf_broadcaster.sendTransform(tf_msg)
+                with _tf_broadcaster_lock:
+                    _tf_broadcaster.sendTransform(tf_msg)
             return _cb
 
         _node.create_subscription(
             Odometry,
             _odom_topic,
-            _make_odom_tf_cb(_parent_frame, _child_frame),
+            _make_odom_tf_cb(
+                _parent_frame, _child_frame,
+                (_offset_x, _offset_y, _offset_z)),
             10,
         )
         sys.stderr.write(
@@ -208,6 +228,7 @@ def _publish_map(parts):
 
 
 _stf_broadcaster = None  # 收到第一条 tf 命令时再延迟创建
+_static_tf_cache = {}    # (parent, child) -> TransformStamped；每次发布完整快照
 
 def _publish_tf(parent, child, pose=None):
     global _stf_broadcaster
@@ -231,10 +252,41 @@ def _publish_tf(parent, child, pose=None):
             _t.transform.rotation.y = qy
             _t.transform.rotation.z = qz
             _t.transform.rotation.w = qw
-        _stf_broadcaster.sendTransform([_t])
+        # /tf_static 使用 TRANSIENT_LOCAL 且通常只保留最后一条消息。若每次只发送
+        # 一个变换，后加入的 RViz 只能收到最后发布的 map->odom，而看不到此前的
+        # 传感器外参。缓存并重发完整集合，保证所有静态 frame 对迟到订阅者可见。
+        _static_tf_cache[(parent, child)] = _t
+        _stf_broadcaster.sendTransform(list(_static_tf_cache.values()))
         sys.stderr.write(f"[drive_bridge] Published static TF: {parent} → {child}\n")
     except Exception as _e:
         sys.stderr.write(f"[drive_bridge] TF broadcast failed: {_e}\n")
+
+
+def _publish_dynamic_tf(parent, child, sec, nanosec, pose):
+    """发布带仿真时间戳的动态 TF，用于轮胎等运动部件。"""
+    global _tf_broadcaster
+    try:
+        from tf2_ros import TransformBroadcaster
+        from geometry_msgs.msg import TransformStamped
+        if _tf_broadcaster is None:
+            _tf_broadcaster = TransformBroadcaster(_node)
+        _t = TransformStamped()
+        _t.header.stamp.sec = int(sec)
+        _t.header.stamp.nanosec = int(nanosec)
+        _t.header.frame_id = parent
+        _t.child_frame_id = child
+        x, y, z, qx, qy, qz, qw = (float(value) for value in pose)
+        _t.transform.translation.x = x
+        _t.transform.translation.y = y
+        _t.transform.translation.z = z
+        _t.transform.rotation.x = qx
+        _t.transform.rotation.y = qy
+        _t.transform.rotation.z = qz
+        _t.transform.rotation.w = qw
+        with _tf_broadcaster_lock:
+            _tf_broadcaster.sendTransform(_t)
+    except Exception as _e:
+        sys.stderr.write(f"[drive_bridge] dynamic TF broadcast failed: {_e}\n")
 
 
 # 处理 start 之前到达的所有地图和 TF 数据
@@ -263,6 +315,9 @@ try:
             _publish_tf(_parts[1], _parts[2])
         elif _cmd == "tf_pose" and len(_parts) == 10:
             _publish_tf(_parts[1], _parts[2], _parts[3:])
+        elif _cmd == "tf_dyn_pose" and len(_parts) == 12:
+            _publish_dynamic_tf(
+                _parts[1], _parts[2], _parts[3], _parts[4], _parts[5:])
         elif _cmd == "ctrl_mode" and len(_parts) == 3:
             try:
                 from std_msgs.msg import Int32 as _Int32
