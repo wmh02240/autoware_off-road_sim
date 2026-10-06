@@ -390,6 +390,21 @@ frame_ids_to_remap:
   - "base_link"
 ```
 
+Stereo camera topics are configured per vehicle with `camera_topics`; each path is
+relative to `topic_prefix`. `primary_side` identifies which stereo side is already
+wired to ROS in the source USD:
+
+```yaml
+camera_topics:
+  primary_side: "left"
+  left:
+    image: "left/image_raw"
+    camera_info: "left/camera_info"
+  right:
+    image: "right/image_raw"
+    camera_info: "right/camera_info"
+```
+
 
 
 ### Drive Command (after remapping)
@@ -415,7 +430,10 @@ Each vehicle exposes two separate command topics — one per message type. The v
 | IMU      | `/ego/imu`         | `/opponent/imu`         | `sensor_msgs/Imu`         |
 | Odometry | `/ego/odom`        | `/opponent/odom`        | `nav_msgs/Odometry`       |
 | LiDAR    | `/ego/point_cloud` | `/opponent/point_cloud` | `sensor_msgs/PointCloud2` |
-| Camera   | `/ego/rgb`         | `/opponent/rgb`         | `sensor_msgs/Image`       |
+| Left camera | `/ego/left/image_raw` | `/opponent/left/image_raw` | `sensor_msgs/Image` |
+| Right camera | `/ego/right/image_raw` | `/opponent/right/image_raw` | `sensor_msgs/Image` |
+| Left camera info | `/ego/left/camera_info` | `/opponent/left/camera_info` | `sensor_msgs/CameraInfo` |
+| Right camera info | `/ego/right/camera_info` | `/opponent/right/camera_info` | `sensor_msgs/CameraInfo` |
 | GNSS     | `/ego/gnss`        | `/opponent/gnss`        | `sensor_msgs/NavSatFix`   |
 | TF       | `/tf`              | `/tf`                   | `tf2_msgs/TFMessage`      |
 
@@ -831,8 +849,8 @@ Disabling shadows, ambient occlusion, and reflections could help improve the GPU
 | Script                    | Purpose                                                                                                                                                                                                                                                                                                        |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scripts/launch_sim.py`   | Main simulation launcher (load USD, spawn vehicles, start keyboard control, record segmentation)                                                                                                                                                                                                               |
-| `scripts/gnss_bridge.py`  | Python 3.10 subprocess that publishes `sensor_msgs/NavSatFix` via rclpy (spawned automatically)                                                                                                                                                                                                                |
-| `scripts/drive_bridge.py` | Python 3.10 subprocess that subscribes to per-vehicle `AckermannDriveStamped` and `autoware_control_msgs/Control` drive topics, forwarding commands to the Isaac Sim OmniGraph controller; also publishes `/map`, static TFs, and per-vehicle `control_mode` status (`std_msgs/Int32`) (spawned automatically) |
+| `scripts/tools/gnss_bridge.py`  | Python 3.10 subprocess that publishes `sensor_msgs/NavSatFix` via rclpy (spawned automatically)                                                                                                                                                                                                                |
+| `scripts/tools/drive_bridge.py` | Python 3.10 subprocess that subscribes to per-vehicle `AckermannDriveStamped` and `autoware_control_msgs/Control` drive topics, forwarding commands to the Isaac Sim OmniGraph controller; also publishes `/map`, static TFs, and per-vehicle `control_mode` status (`std_msgs/Int32`) (spawned automatically) |
 
 
 ---
@@ -854,7 +872,7 @@ Disabling shadows, ambient occlusion, and reflections could help improve the GPU
 ### External ROS 2 drive command has no effect
 
 1. **Switch to ROS2_CONTROL mode first.** Hold `1` (Ego) or `2` (Opponent) for ≥1 second inside the viewport. The terminal status line must show `[ROS2_CONTROL]`, not `[KEYBOARD_CONTROL]`.
-2. **Confirm the bridge is running.** After launch, `ros2 node list` must include `/isaacsim_drive_bridge`. If it is missing, check `scripts/drive_bridge.log` for errors.
+2. **Confirm the bridge is running.** After launch, `ros2 node list` must include `/isaacsim_drive_bridge`. If it is missing, check `scripts/tools/drive_bridge.log` for errors.
 3. **Check startup logs.** The terminal should print lines like:
   ```
    [drive_bridge] Ego_Vehicle: subscribed '/ego/drive' [AckermannDriveStamped]
@@ -886,7 +904,7 @@ Disabling shadows, ambient occlusion, and reflections could help improve the GPU
 ### GNSS topics not appearing
 
 - Confirm `gnss.enabled: true` is set at the top level of the config and `enable_gnss: true` is set on the vehicle.
-- Check the terminal for `[GNSS] <vehicle>: NavSatFix publisher on '/ego/gnss'` at launch. If it shows `[GNSS] Setup error:`, check `scripts/gnss_bridge.log` for the full error from the Python 3.10 bridge process.
+- Check the terminal for `[GNSS] <vehicle>: NavSatFix publisher on '/ego/gnss'` at launch. If it shows `[GNSS] Setup error:`, check `scripts/tools/gnss_bridge.log` for the full error from the Python 3.10 bridge process.
 - The bridge requires `/usr/bin/python3.10` and the ROS Humble packages at `/opt/ros/humble`. Both are present in the Docker image.
 - Verify the topic is live: `ros2 topic hz /ego/gnss` (expected ~10 Hz).
 

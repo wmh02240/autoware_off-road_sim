@@ -4,62 +4,41 @@
 """
 
 import os
-import argparse
 import collections
 import time
 import subprocess
 import sys
-import yaml
-try:
-    from isaacsim import SimulationApp
-except ImportError:
-    from omni.isaac.kit import SimulationApp
+from tools.launch_common import bootstrap
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch IsaacSim with specified assets")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=os.path.join(os.path.dirname(__file__), "configs", "lariad_easy.yaml"),
-        help="Path to configuration file"
+    launch = bootstrap(
+        os.path.join(os.path.dirname(__file__), "configs", "lariad_easy.yaml"),
+        "Launch IsaacSim with specified assets",
     )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        default=False,
-        help="Run without a display window. All vehicles default to ROS2_CONTROL mode.",
-    )
-    # 在解析本启动器自身选项的同时，为 SimulationApp 保留 Kit/Carbonite 参数
-    #（例如 Tracy 分析器开关）。
-    args, _kit_extra_args = parser.parse_known_args()
-    headless_mode = args.headless
-
-    config_path = os.path.abspath(args.config)
-    print(f"Loading configuration from: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-
-    # 以仓库根目录为基准解析路径
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    env_asset_path = os.path.join(repo_root, config.get("environment_asset", ""))
-    print(f"Environment asset: {env_asset_path}")
-
-    # 解析网络配置
-    network_setup = config.get("network_setup", {})
-    ros2_domain_id = network_setup.get("ros2_domain_id", 0)
-    network_interface = network_setup.get("network_interface", "auto")
-    ros2_cmd_timeout_s = float(network_setup.get("ros2_cmd_timeout_s", 1.5))
+    config = launch["config"]
+    repo_root = launch["repo_root"]
+    headless_mode = launch["headless_mode"]
+    ros2_cmd_timeout_s = launch["ros2_cmd_timeout_s"]
+    simulation_app = launch["simulation_app"]
+    carb_settings = launch["carb_settings"]
+    viewport_opts = launch["viewport_opts"]
+    render_res = launch["render_res"]
+    _ui_viewport_mode = launch["ui_viewport_mode"]
+    _ui_split_screen = launch["ui_split_screen"]
+    _ui_default_ctrl_mode = launch["ui_default_ctrl_mode"]
 
     tf_cfg = config.get("tf_settings", {})
     _tf_namespace_links = bool(tf_cfg.get("namespace_links", False))
     _tf_semantic_frames = bool(tf_cfg.get("semantic_frames", False))
     _disable_builtin_tf = bool(tf_cfg.get("disable_builtin_transform_tree", False))
     _publish_map_to_odom = bool(tf_cfg.get("publish_map_to_odom", False))
+    _zero_odom_at_start = bool(tf_cfg.get("zero_odom_at_start", False))
+    _odom_zeroing_duration_s = max(
+        0.0, float(tf_cfg.get("odom_zeroing_duration_s", 1.0)))
+    _wheel_tf_rate_hz = max(
+        1.0, float(tf_cfg.get("wheel_tf_rate_hz", 30.0)))
     _map_frame_id = str(tf_cfg.get("map_frame", "map")).strip("/") or "map"
     _camera_frame_leaf = str(tf_cfg.get("camera_frame_leaf", "ZED_XM")).strip("/") or "ZED_XM"
-    _wheel_tf_rate_hz = max(1.0, float(tf_cfg.get("wheel_tf_rate_hz", 30.0)))
 
     def _ros_frame(veh_cfg, key, default):
         """返回车辆命名空间内的 ROS frame 名称。"""
@@ -69,162 +48,52 @@ def main():
         prefix = str(veh_cfg.get("topic_prefix", f"/{veh_cfg.get('name', 'vehicle').lower()}"))
         return prefix.strip("/") + "/" + leaf
 
-    ui_cfg = config.get("user_interface", {})
-    _ui_viewport_mode = not headless_mode and bool(ui_cfg.get("viewport_mode", False))
-    _ui_split_screen  = not headless_mode and bool(ui_cfg.get("split_screen", False))
-    # 车辆启动时的默认控制模式（非无头模式）。"KEYBOARD" → KEYBOARD_CONTROL，
-    # "ROS2_CONTROL" → ROS2_CONTROL。无头模式下由于没有键盘，
-    # 下方逻辑始终会覆盖为 ROS2_CONTROL。
-    _ui_default_ctrl_mode = str(ui_cfg.get("default_control_mode", "KEYBOARD")).strip().upper()
+    def _camera_topic(veh_cfg, side, kind):
+        """返回配置驱动的左右目话题，并统一加入车辆命名空间。"""
+        defaults = {
+            ("left", "image"): "left/image_raw",
+            ("left", "camera_info"): "left/camera_info",
+            ("right", "image"): "right/image_raw",
+            ("right", "camera_info"): "right/camera_info",
+        }
+        side_cfg = veh_cfg.get("camera_topics", {}).get(side, {})
+        relative = str(side_cfg.get(kind, defaults[(side, kind)])).strip("/")
+        if not relative:
+            relative = defaults[(side, kind)]
+        prefix = "/" + str(veh_cfg.get(
+            "topic_prefix", f"/{veh_cfg.get('name', 'vehicle').lower()}"
+        )).strip("/")
+        absolute = "/" + relative
+        if absolute == prefix or absolute.startswith(prefix + "/"):
+            return absolute
+        return prefix + absolute
 
-    # ── CycloneDDS 设置 ────────────────────────────────────────────────────
-    # 为稳妥起见显式设置 RMW，以防 Isaac Sim 自带解释器启动的 Python
-    # 没有继承 Docker 环境变量。
-    os.environ["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
-    os.environ["ROS_DOMAIN_ID"] = str(ros2_domain_id)
-
-    if network_interface != "auto":
-        # 将显式 IP 或网卡名称解析为 IP 地址
-        def _resolve_ip(iface):
-            if "." in iface:          # 已经是 IP 字符串
-                return iface
-            try:                      # 通过 fcntl SIOCGIFADDR 将网卡名称转换为 IP
-                import socket, fcntl, struct
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                packed = fcntl.ioctl(s.fileno(), 0x8915,
-                                     struct.pack("256s", iface[:15].encode()))
-                return socket.inet_ntoa(packed[20:24])
-            except Exception:
-                return iface          # 后备方案：原样使用该字符串
-
-        lan_ip = _resolve_ip(network_interface)
-        _cyclone_xml = (
-            '<?xml version="1.0" encoding="UTF-8" ?>\n'
-            '<CycloneDDS><Domain><General>\n'
-            f'  <NetworkInterfaceAddress>{lan_ip}</NetworkInterfaceAddress>\n'
-            '</General></Domain></CycloneDDS>\n'
-        )
-        _cyclone_xml_path = "/tmp/cyclone_hil.xml"
-        with open(_cyclone_xml_path, "w") as _f:
-            _f.write(_cyclone_xml)
-        os.environ["CYCLONEDDS_URI"] = f"file://{_cyclone_xml_path}"
-        print(f"[ROS2] CycloneDDS pinned to interface: {lan_ip}")
-        print(f"[ROS2] CYCLONEDDS_URI = {os.environ['CYCLONEDDS_URI']}")
-    else:
-        print("[ROS2] CycloneDDS using automatic interface/multicast discovery")
-
-    print(f"[ROS2] RMW_IMPLEMENTATION=rmw_cyclonedds_cpp  ROS_DOMAIN_ID={ros2_domain_id}")
+    def _main_camera_topic_override(veh_cfg, node_type, stream_type, current):
+        """把 USD 中旧的主相机话题迁移到配置指定的双目侧。"""
+        if not isinstance(current, str) or not current.strip():
+            return None
+        primary_side = str(
+            veh_cfg.get("camera_topics", {}).get("primary_side", "")
+        ).strip().lower()
+        if primary_side not in ("left", "right"):
+            return None
+        prefix = "/" + str(veh_cfg.get(
+            "topic_prefix", f"/{veh_cfg.get('name', 'vehicle').lower()}"
+        )).strip("/")
+        normalized = "/" + current.strip("/")
+        if ("CameraInfoHelper" in node_type
+                and normalized in ("/camera_info", prefix + "/camera_info")):
+            return _camera_topic(veh_cfg, primary_side, "camera_info")
+        if ("CameraHelper" in node_type and "CameraInfoHelper" not in node_type
+                and str(stream_type).lower() == "rgb"
+                and normalized in ("/rgb", prefix + "/rgb")):
+            return _camera_topic(veh_cfg, primary_side, "image")
+        return None
 
     # 初始化仿真应用
-    viewport_opts = config.get("graphics_settings", {})
-    render_res = viewport_opts.get("render_resolution", [2560, 1440])
-
-    # 此操作必须在导入其他 omni 模块之前完成。
-    # 加载完整的 Isaac Sim Experience（与 isaac-sim.sh 使用相同 Kit 配置），
-    # 以提供全部面板、编辑器和扩展，而不是最精简的 Python 独立界面。
-    # CARB_APP_PATH 指向 .../release/kit；Experience 的 Kit 文件位于同级的
-    # .../release/apps/ 目录，因此需要向上返回一级。
-    _carb_app_path = os.environ.get("CARB_APP_PATH", "")
-    _release_dir = os.path.dirname(_carb_app_path)  # 对应路径：.../release
-    _exp_full = os.path.join(_release_dir, "apps", "isaacsim.exp.full.kit")
-    if not os.path.exists(_exp_full):
-        # 后备方案：在 apps/ 中查找任意 Isaac Sim 完整版 Kit 文件
-        _apps_dir = os.path.join(_release_dir, "apps")
-        _candidates = [f for f in os.listdir(_apps_dir) if "full" in f and f.endswith(".kit")] if os.path.isdir(_apps_dir) else []
-        if _candidates:
-            _exp_full = os.path.join(_apps_dir, sorted(_candidates)[0])
-            print(f"[SimApp] Using experience: {_exp_full}")
-        else:
-            print(f"[SimApp] Warning: isaacsim.exp.full.kit not found in {_apps_dir}, falling back to default")
-            _exp_full = ""
-    _sim_cfg = {"headless": headless_mode, "experience": _exp_full}
-
-    # Tracy 必须在 SimulationApp 启动前配置。YAML 开关可避免常规运行承担
-    # 分析器开销，而上面的 parse_known_args 仍允许从命令行手动传入 Kit 分析参数。
-    _profiling_cfg = config.get("profiling", {})
-    _tracy_cfg = _profiling_cfg.get("tracy", {})
-    _tracy_enabled = bool(_tracy_cfg.get("enabled", False))
-    if _tracy_enabled:
-        _sim_cfg["profiler_backend"] = ["tracy"]
-        _tracy_gpu = bool(_tracy_cfg.get("gpu", True))
-        _tracy_args = [
-            "--enable", "omni.kit.profiler.tracy",
-            "--/profiler/enabled=true",
-            "--/app/profilerBackend=tracy",
-            "--/app/profileFromStart=true",
-        ]
-        if _tracy_gpu:
-            _tracy_args.extend([
-                "--/profiler/gpu=true",
-                "--/profiler/gpu/tracyInject/enabled=true",
-            ])
-        for _tracy_arg in _tracy_args:
-            if _tracy_arg not in sys.argv:
-                sys.argv.append(_tracy_arg)
-        print(f"[Profile] Tracy enabled (GPU trace: {_tracy_gpu}). "
-              "Open the bundled Tracy UI and click Connect.")
-    if not headless_mode:
-        _sim_cfg["width"]           = render_res[0]
-        _sim_cfg["height"]          = render_res[1]
-        _sim_cfg["display_options"] = 3287  # 3286（默认值）| 1（显示 FPS）
-    simulation_app = SimulationApp(_sim_cfg)
-    
-    # 单独强制设置输出渲染器分辨率（与窗口大小解耦时很有用）
-    import carb
-    carb_settings = carb.settings.get_settings()
-
-    if not headless_mode:
-        carb_settings.set_int("/app/renderer/resolution/width", render_res[0])
-        carb_settings.set_int("/app/renderer/resolution/height", render_res[1])
-        # 切换视口 FPS 显示
-        carb_settings.set_bool("/app/window/showFps", True)
-        carb_settings.set_bool("/app/viewport/showFps", True)
-        carb_settings.set_bool("/exts/omni.kit.viewport.window/fps", True)
-        # DLSS 超分辨率 + 帧生成（FPS 倍增器 x2）
-        # /rtx/post/aa/op：0=无，1=TAA，2=FXAA，3=DLSS，4=DLAA
-        # /rtx/post/dlss/execMode：0=性能（约 2x），1=平衡，2=质量，3=超高性能
-        # /rtx-transient/dlssg/enabled：DLSS-G 帧生成，即界面中的 FPS 倍增器
-        if viewport_opts.get("enable_DLSS_FPS_Multiplier_x2", False):
-            carb_settings.set_int("/rtx/post/aa/op", 3)
-            carb_settings.set_int("/rtx/post/dlss/execMode", 0)
-            carb_settings.set_bool("/rtx-transient/dlssg/enabled", True)
-            print("[Renderer] DLSS Performance + FPS Multiplier x2 (DLSS-G) enabled.")
-        if viewport_opts.get("disable_shadows", False):
-            carb_settings.set_bool("/rtx/shadows/enabled", False)
-            print("[Renderer] Shadows disabled.")
-        if viewport_opts.get("disable_ambient_occlusion", False):
-            carb_settings.set_bool("/rtx/ambientOcclusion/enabled", False)
-            print("[Renderer] Ambient occlusion disabled.")
-        if viewport_opts.get("disable_reflections", False):
-            carb_settings.set_bool("/rtx/reflections/enabled", False)
-            print("[Renderer] Reflections disabled.")
-        print(f"Configured Viewport Render Resolution to {render_res[0]}x{render_res[1]} with FPS counter")
-
-        # 视口模式：启动时隐藏视口以外的所有面板，使它们从一开始就不向用户显示，
-        # 而不是显示后再关闭。
-        if _ui_viewport_mode:
-            try:
-                import omni.ui as _ui_startup
-                for _pname in ["Stage", "Content", "Console", "Property", "Layer",
-                               "Semantics Schema Editor", "Action Graph",
-                               "Render Settings", "Statistics", "Profiler",
-                               "Animation Graph", "Physics", "Replicator",
-                               "Material Graph", "Robot Inspector"]:
-                    try:
-                        _ui_startup.Workspace.show_window(_pname, False)
-                    except Exception:
-                        pass
-                carb_settings.set_bool("/app/window/showMenu", False)
-                print("[UI] Viewport mode: panels suppressed at startup.")
-            except Exception as _vms_err:
-                print(f"[UI] Viewport mode startup error: {_vms_err}")
-
-    # 阻止 Isaac Sim Full 自动向 Stage 添加 defaultLight。
-    # 环境 USD 已包含 DomeLight，第二盏灯会改变场景效果。
-    carb_settings.set_bool("/app/stage/generateDefaultLight", False)
 
     import omni.usd
-    from pxr import Usd, UsdGeom, Gf, Sdf
+    from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
     import omni.ext
 
     # 确保已有 Stage 打开
@@ -319,432 +188,27 @@ def main():
         else:
             print(f"Warning: Vehicle asset not found at {veh_asset_path}")
 
-    # ── 车辆 USD 兼容性修复：IMU 固定关节 ───────────────────────────────────
-    # roboracer_max.usd 包含名为 ``Sensors/IMU`` 的过期刚体目标。
-    # 资源中实际的刚体 Prim 是底盘 base_link 下的 ``Imu_Sensor``。
-    # 无法解析的刚体关系会使 PhysX 丢弃整个固定关节。这里不修改二进制 USD Crate，
-    # 而是在组合 Stage 中写入覆盖，并且只替换这一确切的过期目标，
-    # 从而保证该修复对其他车辆资源和配置是安全的。
-    for _imu_joint in stage.Traverse():
-        _imu_joint_path = _imu_joint.GetPath().pathString
-        if not _imu_joint_path.endswith("/Joints/IMUFixedJoint"):
-            continue
+    # 已知 RoboRacer USD 的物理兼容修复集中到独立模块。
+    from tools.lawn_mower_physics import repair_vehicle_physics
 
-        _vehicle_root = _imu_joint_path.removesuffix("/Joints/IMUFixedJoint")
-        _imu_target = Sdf.Path(
-            f"{_vehicle_root}/Rigid_Bodies/Chassis/base_link/Imu_Sensor")
-        if not stage.GetPrimAtPath(_imu_target).IsValid():
-            print(f"[Physics] IMU joint repair skipped: expected sensor prim is missing: {_imu_target}")
-            continue
+    repair_vehicle_physics(stage)
 
-        _repaired_rels = []
-        for _rel in _imu_joint.GetRelationships():
-            _targets = _rel.GetTargets()
-            _new_targets = []
-            _changed = False
-            for _target in _targets:
-                # 不要改写任意缺失目标：此修复刻意只作用于已知的旧 IMU 位置。
-                if str(_target).endswith("/Sensors/IMU"):
-                    _new_targets.append(_imu_target)
-                    _changed = True
-                else:
-                    _new_targets.append(_target)
-            if _changed:
-                _rel.SetTargets(_new_targets)
-                _repaired_rels.append(_rel.GetName())
 
-        if _repaired_rels:
-            print(f"[Physics] Repaired IMUFixedJoint at {_imu_joint_path}: "
-                  f"{', '.join(_repaired_rels)} -> {_imu_target}")
+    # P0/P1/P2 的模型发现和语义外参计算集中在独立模块中。
+    from tools.lawn_mower_tf import (
+        build_semantic_tf_specs,
+        node_type as _node_type,
+        relative_pose as _relative_pose,
+        wheel_rotation as _wheel_rotation,
+    )
 
-    # 源车辆 USD 中有一个悬架关节，其写入的两个局部坐标系会解析到不同的世界坐标系。
-    # 因此开始播放时，PhysX 会将连接部件突然吸合。在 PhysX 读取 USD 前，
-    # 保留 body0 已写入的锚点，并由此推导 body1 的局部坐标系。
-    for _susp_joint in stage.Traverse():
-        _susp_path = _susp_joint.GetPath().pathString
-        if not _susp_path.endswith("/Joints/Chassis__Arm_Rear_Upper_Right"):
-            continue
+    _semantic_tf_specs = build_semantic_tf_specs(
+        stage,
+        vehicles,
+        _ros_frame,
+        _disable_builtin_tf,
+    )
 
-        _body0_targets = _susp_joint.GetRelationship("physics:body0").GetTargets()
-        _body1_targets = _susp_joint.GetRelationship("physics:body1").GetTargets()
-        if len(_body0_targets) != 1 or len(_body1_targets) != 1:
-            print(f"[Physics] Suspension joint repair skipped: expected one body0 and one body1 target at {_susp_path}")
-            continue
-
-        _body0 = stage.GetPrimAtPath(_body0_targets[0])
-        _body1 = stage.GetPrimAtPath(_body1_targets[0])
-        _pos0_attr = _susp_joint.GetAttribute("physics:localPos0")
-        _rot0_attr = _susp_joint.GetAttribute("physics:localRot0")
-        _pos1_attr = _susp_joint.GetAttribute("physics:localPos1")
-        _rot1_attr = _susp_joint.GetAttribute("physics:localRot1")
-        _pos0, _rot0 = _pos0_attr.Get(), _rot0_attr.Get()
-
-        if (not _body0.IsValid() or not _body1.IsValid() or _pos0 is None or _rot0 is None
-                or not _pos1_attr or not _rot1_attr):
-            print(f"[Physics] Suspension joint repair skipped: incomplete joint data at {_susp_path}")
-            continue
-
-        try:
-            def _quatd(_q):
-                _im = _q.GetImaginary()
-                return Gf.Quatd(float(_q.GetReal()), Gf.Vec3d(float(_im[0]), float(_im[1]), float(_im[2])))
-
-            # USD 使用行向量变换：local_frame * body_world。
-            _local0 = Gf.Matrix4d(1.0)
-            _local0.SetRotate(Gf.Rotation(_quatd(_rot0)))
-            _local0.SetTranslateOnly(Gf.Vec3d(float(_pos0[0]), float(_pos0[1]), float(_pos0[2])))
-            _body0_world = omni.usd.get_world_transform_matrix(_body0)
-            _body1_world = omni.usd.get_world_transform_matrix(_body1)
-            _joint_world = _local0 * _body0_world
-            _local1 = _joint_world * _body1_world.GetInverse()
-
-            _new_pos1 = _local1.ExtractTranslation()
-            _new_rot1 = _local1.ExtractRotationQuat()
-            _new_im = _new_rot1.GetImaginary()
-            _pos1_attr.Set(Gf.Vec3f(float(_new_pos1[0]), float(_new_pos1[1]), float(_new_pos1[2])))
-            _rot1_attr.Set(Gf.Quatf(
-                float(_new_rot1.GetReal()),
-                Gf.Vec3f(float(_new_im[0]), float(_new_im[1]), float(_new_im[2])),
-            ))
-
-            _anchor_error = (
-                _joint_world.ExtractTranslation()
-                - (_local1 * _body1_world).ExtractTranslation()
-            ).GetLength()
-            print(f"[Physics] Repaired suspension joint at {_susp_path}: "
-                  f"body1 local frame aligned (anchor error={_anchor_error:.6g} m)")
-        except Exception as _susp_repair_err:
-            print(f"[Physics] Suspension joint repair failed at {_susp_path}: {_susp_repair_err}")
-
-    # Imu_Sensor 是由上述固定关节连接的刚体，但源 USD 使用负质量哨兵值，
-    # 且没有可供 PhysX 推导质量属性的碰撞体。为这个小型 IMU（30 mm、10 g）
-    # 显式设置物理有效的质量和长方体惯量，避免采用 PhysX 不稳定的小球后备值。
-    # 此处不要修改 LiDAR；那是另一个资源问题，将单独修复。
-    for _imu_sensor in stage.Traverse():
-        _imu_sensor_path = _imu_sensor.GetPath().pathString
-        if not _imu_sensor_path.endswith("/Rigid_Bodies/Chassis/base_link/Imu_Sensor"):
-            continue
-        try:
-            from pxr import UsdPhysics
-            _imu_mass_api = UsdPhysics.MassAPI.Apply(_imu_sensor)
-            _imu_mass_api.CreateMassAttr(0.01)  # 单位：kg
-            # 对边长 30 mm、质量 10 g 的立方体，I = m * side^2 / 6。
-            _imu_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(1.5e-6, 1.5e-6, 1.5e-6))
-            _imu_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
-            print(f"[Physics] Repaired IMU mass properties at {_imu_sensor_path}: "
-                  "mass=0.01 kg, diagonalInertia=(1.5e-06, 1.5e-06, 1.5e-06) kg·m²")
-        except Exception as _imu_mass_err:
-            print(f"[Physics] IMU mass-property repair failed at {_imu_sensor_path}: {_imu_mass_err}")
-
-    # OS2 RTX LiDAR 同样被写成使用负质量哨兵值且没有碰撞体的刚体。
-    # 将其近似为 0.40 kg 的圆柱体（直径 90 mm、高 80 mm），以获得稳定的显式属性。
-    # 此操作有意与上面的 IMU 修复相互独立。
-    for _lidar_sensor in stage.Traverse():
-        _lidar_sensor_path = _lidar_sensor.GetPath().pathString
-        if not _lidar_sensor_path.endswith("/Sensors/OS2/sensor"):
-            continue
-        try:
-            from pxr import UsdPhysics
-            _lidar_mass_api = UsdPhysics.MassAPI.Apply(_lidar_sensor)
-            _lidar_mass_api.CreateMassAttr(0.40)  # 单位：kg
-            # 实心圆柱体惯量：Ixx=Iyy≈4.16e-4，Izz≈4.05e-4 kg·m²。
-            _lidar_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(4.16e-4, 4.16e-4, 4.05e-4))
-            _lidar_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
-            print(f"[Physics] Repaired OS2 LiDAR mass properties at {_lidar_sensor_path}: "
-                  "mass=0.4 kg, diagonalInertia=(0.000416, 0.000416, 0.000405) kg·m²")
-        except Exception as _lidar_mass_err:
-            print(f"[Physics] OS2 LiDAR mass-property repair failed at {_lidar_sensor_path}: {_lidar_mass_err}")
-
-    # ── P0：ROS 语义坐标系、深度图和里程计修复 ────────────────────────────────
-    # 车辆资源中的 PhysX 刚体原点主要服务于 CAD/物理建模。例如 OffRoad 的四个
-    # Wheel 刚体本身都位于车体原点，轮胎依靠子 Mesh 的局部变换摆放到四角。
-    # 因此不能直接把原始刚体原点当作 ROS Link 原点。这里建立独立的语义 frame
-    # 规格，并交由 drive_bridge 发布；不修改二进制 USD 资源。
-    _semantic_tf_specs = {}
-
-    def _node_type(_prim):
-        _attr = _prim.GetAttribute("node:type")
-        return str(_attr.Get() or "") if _attr else ""
-
-    def _relative_pose(_parent_prim, _child_prim):
-        # 不直接做完整 Matrix 逆乘：车辆资源内部含 cm->m 缩放层，完整逆乘会把
-        # 平移恢复到源 CAD 单位。世界坐标差本身已是米，再旋转回父坐标即可。
-        _parent_world = omni.usd.get_world_transform_matrix(_parent_prim)
-        _child_world = omni.usd.get_world_transform_matrix(_child_prim)
-        _parent_pos = _parent_world.ExtractTranslation()
-        _child_pos = _child_world.ExtractTranslation()
-        _parent_rot = _parent_world.ExtractRotation()
-        _child_rot = _child_world.ExtractRotation()
-        _local_pos = _parent_rot.GetInverse().TransformDir(_child_pos - _parent_pos)
-        # USD 行向量组合满足 child_rot = local_rot * parent_rot。
-        _local_rot = _child_rot * _parent_rot.GetInverse()
-        _local_quat = _local_rot.GetQuat()
-        _local_imag = _local_quat.GetImaginary()
-        return (
-            float(_local_pos[0]), float(_local_pos[1]), float(_local_pos[2]),
-            float(_local_imag[0]), float(_local_imag[1]), float(_local_imag[2]),
-            float(_local_quat.GetReal()),
-        )
-
-    for _p0_veh in vehicles:
-        if not _p0_veh.get("enabled", True):
-            continue
-        _p0_name = _p0_veh.get("name", "Vehicle")
-        _p0_root = f"/World/{_p0_name}"
-        _p0_prefix = "/" + _p0_veh.get(
-            "topic_prefix", f"/{_p0_name.lower()}"
-        ).strip("/")
-        _p0_base_frame = _ros_frame(_p0_veh, "base_link", "base_link")
-        _p0_footprint_frame = _ros_frame(
-            _p0_veh, "base_footprint", "base_footprint")
-        _p0_chassis_frame = _ros_frame(_p0_veh, "chassis", "chassis_link")
-        _p0_camera_frame = _ros_frame(_p0_veh, "camera", "camera_frame")
-        _p0_camera_optical = _ros_frame(
-            _p0_veh, "camera_optical", "camera_optical_frame")
-        _p0_imu_frame = _ros_frame(_p0_veh, "imu", "imu_link")
-        _p0_lidar_frame = _ros_frame(_p0_veh, "lidar", "lidar_link")
-
-        _p0_chassis = None
-        for _candidate in stage.Traverse():
-            _candidate_path = _candidate.GetPath().pathString
-            if (_candidate_path.startswith(_p0_root)
-                    and _candidate_path.endswith("/Rigid_Bodies/Chassis")):
-                _p0_chassis = _candidate
-                break
-        if _p0_chassis is None or not _p0_chassis.IsValid():
-            print(f"[P0 TF] {_p0_name}: missing Chassis prim; semantic TF skipped")
-            continue
-        _p0_model_root = _p0_chassis.GetPath().pathString.removesuffix(
-            "/Rigid_Bodies/Chassis")
-
-        _p0_render_products = []
-        _p0_camera_prim = None
-        _p0_imu_prim = None
-        _p0_lidar_prim = None
-        _p1_camera_prims = []
-        _p1_imu_prims = []
-        _p1_lidar_prims = []
-        _p1_wheel_meshes = {}
-
-        for _p0_prim in stage.Traverse():
-            _p0_path = _p0_prim.GetPath().pathString
-            if not _p0_path.startswith(_p0_root):
-                continue
-            _p0_ntype = _node_type(_p0_prim)
-
-            # P1：收集模型中真实存在的全部传感器和轮胎视觉 Mesh。轮胎刚体
-            # 原点不能作为轮轴中心，因此必须使用其子 Mesh 的实时世界姿态。
-            if _p0_prim.IsA(UsdGeom.Camera):
-                _p1_camera_prims.append(_p0_prim)
-            if _p0_prim.GetTypeName() == "IsaacImuSensor":
-                _p1_imu_prims.append(_p0_prim)
-            if "OmniLidar" in _p0_prim.GetTypeName():
-                _p1_lidar_prims.append(_p0_prim)
-            if (_p0_prim.IsA(UsdGeom.Mesh)
-                    and _p0_path.startswith(f"{_p0_model_root}/Rigid_Bodies/Wheel_")):
-                _p1_wheel_name = _p0_path.split("/Rigid_Bodies/", 1)[1].split("/", 1)[0]
-                _p1_wheel_meshes.setdefault(_p1_wheel_name, []).append(_p0_prim)
-
-            # 里程计必须以真实 Chassis 为数据源，而不是固定在车体上的相机刚体。
-            if "ComputeOdometry" in _p0_ntype:
-                _p0_chassis_rel = _p0_prim.GetRelationship("inputs:chassisPrim")
-                if _p0_chassis_rel:
-                    _p0_old = list(_p0_chassis_rel.GetTargets())
-                    _p0_chassis_rel.SetTargets([_p0_chassis.GetPath()])
-                    print(f"[P0 Odom] {_p0_name}: {_p0_path} chassisPrim "
-                          f"{_p0_old} -> {_p0_chassis.GetPath()}")
-
-            # 找出所有连接到真实相机 Prim 的有效 Render Product。
-            if "CreateRenderProduct" in _p0_ntype:
-                _p0_cam_rel = _p0_prim.GetRelationship("inputs:cameraPrim")
-                _p0_cams = list(_p0_cam_rel.GetTargets()) if _p0_cam_rel else []
-                if len(_p0_cams) == 1 and stage.GetPrimAtPath(_p0_cams[0]).IsValid():
-                    _p0_output = _p0_prim.GetAttribute("outputs:renderProductPath")
-                    if _p0_output:
-                        _p0_render_products.append(_p0_output.GetPath())
-                        if _p0_camera_prim is None:
-                            _p0_camera_prim = stage.GetPrimAtPath(_p0_cams[0])
-
-            if "ReadIMU" in _p0_ntype:
-                _p0_imu_rel = _p0_prim.GetRelationship("inputs:imuPrim")
-                _p0_imus = list(_p0_imu_rel.GetTargets()) if _p0_imu_rel else []
-                if len(_p0_imus) == 1 and stage.GetPrimAtPath(_p0_imus[0]).IsValid():
-                    _p0_imu_prim = stage.GetPrimAtPath(_p0_imus[0])
-
-            if "PublishTransformTree" in _p0_ntype and _disable_builtin_tf:
-                # 该 Isaac Sim 版本的 TransformTree 会忽略运行时 enabled=false。
-                # 在 OmniGraph 编译前将 Prim 停用，才能保证错误的 CAD 刚体 TF
-                # 不再发布。覆盖只存在于组合 Stage，不会修改源 USD。
-                _p0_exec = _p0_prim.GetAttribute("inputs:execIn")
-                if _p0_exec:
-                    _p0_exec.SetConnections([])
-                _p0_prim.SetActive(False)
-                print(f"[P0 TF] {_p0_name}: disabled invalid built-in TransformTree {_p0_path}")
-
-            if _p0_prim.GetTypeName() == "IsaacImuSensor" and _p0_imu_prim is None:
-                _p0_imu_prim = _p0_prim
-            if "OmniLidar" in _p0_prim.GetTypeName():
-                _p0_lidar_prim = _p0_prim
-
-        # 深度 Helper 只允许连接一个有效 Render Product。源 OffRoad USD 中还保留了
-        # 指向不存在 isaac_create_render_product_01 的悬空连接，这会导致深度图异常。
-        if _p0_render_products:
-            _p0_valid_render = _p0_render_products[0]
-            for _p0_prim in stage.Traverse():
-                _p0_path = _p0_prim.GetPath().pathString
-                if not _p0_path.startswith(_p0_root):
-                    continue
-                _p0_ntype = _node_type(_p0_prim)
-                if "Camera" not in _p0_ntype or "Helper" not in _p0_ntype:
-                    continue
-                _p0_type_attr = _p0_prim.GetAttribute("inputs:type")
-                _p0_topic_attr = _p0_prim.GetAttribute("inputs:topicName")
-                _p0_kind = str(_p0_type_attr.Get() or "") if _p0_type_attr else ""
-                _p0_topic = str(_p0_topic_attr.Get() or "") if _p0_topic_attr else ""
-                _p0_render_attr = _p0_prim.GetAttribute("inputs:renderProductPath")
-                if _p0_render_attr and (_p0_kind == "depth" or _p0_topic.strip("/") == "depth"):
-                    _p0_old_connections = list(_p0_render_attr.GetConnections())
-                    _p0_render_attr.SetConnections([_p0_valid_render])
-                    print(f"[P0 Depth] {_p0_name}: {_p0_path} render product "
-                          f"{_p0_old_connections} -> [{_p0_valid_render}]")
-                _p0_frame_attr = _p0_prim.GetAttribute("inputs:frameId")
-                if _p0_frame_attr:
-                    _p0_frame_attr.Set(_p0_camera_optical)
-
-        # IMU 和 LiDAR 消息使用各自的真实传感器 frame，而不是 base_link。
-        for _p0_prim in stage.Traverse():
-            _p0_path = _p0_prim.GetPath().pathString
-            if not _p0_path.startswith(_p0_root):
-                continue
-            _p0_ntype = _node_type(_p0_prim)
-            _p0_frame_attr = _p0_prim.GetAttribute("inputs:frameId")
-            if not _p0_frame_attr:
-                continue
-            if "PublishImu" in _p0_ntype:
-                _p0_frame_attr.Set(_p0_imu_frame)
-            elif "LidarHelper" in _p0_ntype:
-                _p0_frame_attr.Set(_p0_lidar_frame)
-
-        # 根据轮胎世界包围盒下边界推导 base_footprint；base_link 定义在 Chassis
-        # 原点。这样不会把出生高度或 CAD 根节点偏移误认为底盘离地高度。
-        _p0_ground_z = None
-        try:
-            _p0_bbox_cache = UsdGeom.BBoxCache(
-                Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
-            for _p0_prim in stage.Traverse():
-                _p0_path = _p0_prim.GetPath().pathString
-                if (not _p0_path.startswith(f"{_p0_model_root}/Rigid_Bodies/Wheel_")
-                        or not _p0_prim.IsA(UsdGeom.Mesh)):
-                    continue
-                _p0_min_z = float(
-                    _p0_bbox_cache.ComputeWorldBound(_p0_prim)
-                    .ComputeAlignedBox().GetMin()[2])
-                _p0_ground_z = _p0_min_z if _p0_ground_z is None else min(
-                    _p0_ground_z, _p0_min_z)
-        except Exception as _p0_bbox_err:
-            print(f"[P0 TF] {_p0_name}: wheel ground detection failed: {_p0_bbox_err}")
-
-        _p0_chassis_z = float(
-            omni.usd.get_world_transform_matrix(_p0_chassis).ExtractTranslation()[2])
-        _p0_base_height = max(0.0, _p0_chassis_z - _p0_ground_z) \
-            if _p0_ground_z is not None else 0.0
-
-        _p0_static = [
-            (_p0_footprint_frame, _p0_base_frame,
-             (0.0, 0.0, _p0_base_height, 0.0, 0.0, 0.0, 1.0)),
-            (_p0_base_frame, _p0_chassis_frame,
-             (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)),
-        ]
-        _p1_static_children = {_p0_base_frame, _p0_chassis_frame}
-
-        def _p1_add_static(_parent, _child, _pose):
-            if not _child or _child in _p1_static_children:
-                return
-            _p0_static.append((_parent, _child, _pose))
-            _p1_static_children.add(_child)
-
-        # 为每个相机建立 mount frame 和 optical frame。当前实际发布图像的相机
-        # 沿用 camera/camera_optical 配置；其余相机按名称映射到独立 frame。
-        for _p1_camera in _p1_camera_prims:
-            _p1_camera_path = _p1_camera.GetPath().pathString
-            _p1_camera_name = _p1_camera.GetName().lower()
-            if (_p0_camera_prim is not None
-                    and _p1_camera_path == _p0_camera_prim.GetPath().pathString):
-                _p1_camera_key, _p1_optical_key = "camera", "camera_optical"
-                _p1_camera_default, _p1_optical_default = "camera_frame", "camera_optical_frame"
-            elif "right" in _p1_camera_name:
-                _p1_camera_key, _p1_optical_key = "camera_right", "camera_right_optical"
-                _p1_camera_default, _p1_optical_default = "camera_right_frame", "camera_right_optical_frame"
-            elif "left" in _p1_camera_name:
-                _p1_camera_key, _p1_optical_key = "camera_left", "camera_left_optical"
-                _p1_camera_default, _p1_optical_default = "camera_left_frame", "camera_left_optical_frame"
-            elif "depth" in _p1_camera_name:
-                _p1_camera_key, _p1_optical_key = "camera_depth", "camera_depth_optical"
-                _p1_camera_default, _p1_optical_default = "camera_depth_frame", "camera_depth_optical_frame"
-            else:
-                _p1_camera_key, _p1_optical_key = "camera_color", "camera_color_optical"
-                _p1_camera_default, _p1_optical_default = "camera_color_frame", "camera_color_optical_frame"
-            _p1_camera_frame = _ros_frame(_p0_veh, _p1_camera_key, _p1_camera_default)
-            _p1_optical_frame = _ros_frame(_p0_veh, _p1_optical_key, _p1_optical_default)
-            _p1_add_static(
-                _p0_base_frame, _p1_camera_frame,
-                _relative_pose(_p0_chassis, _p1_camera))
-            # USD Camera：+X 向右、+Y 向上、-Z 向前；ROS optical：+X 向右、
-            # +Y 向下、+Z 向前，因此需要绕 X 轴旋转 180°。
-            _p1_add_static(
-                _p1_camera_frame, _p1_optical_frame,
-                (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0))
-
-        for _p1_imu in _p1_imu_prims:
-            _p1_imu_path = _p1_imu.GetPath().pathString
-            _p1_is_active = (_p0_imu_prim is not None
-                             and _p1_imu_path == _p0_imu_prim.GetPath().pathString)
-            _p1_imu_frame = (_p0_imu_frame if _p1_is_active else
-                             _ros_frame(_p0_veh, "realsense_imu", "realsense_imu_link"))
-            _p1_add_static(
-                _p0_base_frame, _p1_imu_frame,
-                _relative_pose(_p0_chassis, _p1_imu))
-
-        for _p1_lidar in _p1_lidar_prims:
-            _p1_add_static(
-                _p0_base_frame, _p0_lidar_frame,
-                _relative_pose(_p0_chassis, _p1_lidar))
-
-        _p1_wheel_key_map = {
-            "Wheel_Front_Left": "front_left_wheel",
-            "Wheel_Front_Right": "front_right_wheel",
-            "Wheel_Rear_Left": "rear_left_wheel",
-            "Wheel_Rear_Right": "rear_right_wheel",
-        }
-        _p1_wheels = []
-        for _p1_wheel_name, _p1_wheel_key in _p1_wheel_key_map.items():
-            _p1_candidates = _p1_wheel_meshes.get(_p1_wheel_name, [])
-            if not _p1_candidates:
-                print(f"[P1 TF] {_p0_name}: missing visual Mesh for {_p1_wheel_name}")
-                continue
-            # 选择层级最浅的 Mesh；它是承载轮胎中心变换的视觉根 Mesh。
-            _p1_wheel_prim = min(
-                _p1_candidates,
-                key=lambda _prim: (_prim.GetPath().pathString.count("/"),
-                                   _prim.GetPath().pathString),
-            )
-            _p1_wheel_frame = _ros_frame(
-                _p0_veh, _p1_wheel_key, f"{_p1_wheel_key}_link")
-            _p1_wheels.append((_p1_wheel_frame, _p1_wheel_prim))
-
-        _semantic_tf_specs[_p0_name] = {
-            "odom_topic": _p0_prefix + "/odom",
-            "odom_frame": _ros_frame(_p0_veh, "odom", "odom"),
-            "footprint_frame": _p0_footprint_frame,
-            "base_frame": _p0_base_frame,
-            "base_height": _p0_base_height,
-            "static": _p0_static,
-            "chassis_prim": _p0_chassis,
-            "wheels": _p1_wheels,
-        }
-        print(f"[P1 TF] {_p0_name}: semantic frames prepared; "
-              f"base_link height={_p0_base_height:.6f} m, "
-              f"static TFs={len(_p0_static)}, dynamic wheels={len(_p1_wheels)}")
 
     # 应用配置中的 PhysicsScene 覆盖
     physics_opts = config.get("physics_settings", {})
@@ -939,6 +403,17 @@ def main():
                             _cam_fid_attr.Set(_camera_frame_id)
                             remapped_count += 1
                             print(f"[ROS2 setup] {veh_name}: camera frame -> '{_camera_frame_id}'")
+                        _cam_topic_attr = prim.GetAttribute("inputs:topicName")
+                        _cam_type_attr = prim.GetAttribute("inputs:type")
+                        _cam_topic = str(_cam_topic_attr.Get() or "") if _cam_topic_attr else ""
+                        _cam_type = str(_cam_type_attr.Get() or "") if _cam_type_attr else ""
+                        _cam_topic_override = _main_camera_topic_override(
+                            veh, str(node_type), _cam_type, _cam_topic)
+                        if _cam_topic_attr and _cam_topic_override:
+                            _cam_topic_attr.Set(_cam_topic_override)
+                            remapped_count += 1
+                            print(f"[ROS2 setup] {veh_name}: main camera topic "
+                                  f"'{_cam_topic}' -> '{_cam_topic_override}'")
                 except Exception: pass
 
             # ── 传感器话题重映射（穷举扫描）────────────────────────────────────
@@ -1044,7 +519,219 @@ def main():
     import omni.appwindow
     import omni.graph.core as og
     import omni.timeline
-    
+
+    # ── P3：为模型中已有但未接入 ROS 2 的传感器补建发布链路 ────────────────
+    # 只使用 USD 中真实存在的 Prim。OffRoad 没有 LiDAR、两个模型都没有毫米波
+    # 雷达，因此这些能力由 P2 校验明确报告，而不会生成虚假数据。
+    def _p3_connect(_src, _dst):
+        og.Controller.connect(
+            og.Controller.attribute(_src), og.Controller.attribute(_dst))
+
+    def _p3_add_camera_stream(_veh, _graph_path, _camera_prim, _suffix,
+                              _topic, _frame_id, _stream_type="rgb",
+                              _camera_info_topic=None):
+        _run_path = f"{_graph_path}/isaac_run_one_simulation_frame"
+        _ctx_path = f"{_graph_path}/ros2_context"
+        _graph_node = og.get_node_by_path(_run_path)
+        if not _graph_node.is_valid():
+            raise RuntimeError(f"sensor graph execution node missing: {_run_path}")
+        _graph_obj = _graph_node.get_graph()
+        _rp_name = f"p3_render_{_suffix}"
+        _helper_name = f"p3_camera_{_suffix}"
+        _info_name = f"p3_camera_info_{_suffix}"
+        og.Controller.edit(_graph_obj, {
+            og.Controller.Keys.CREATE_NODES: [
+                (_rp_name, "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                (_helper_name, "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                (_info_name, "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+            ],
+            og.Controller.Keys.SET_VALUES: [
+                (f"{_helper_name}.inputs:enabled", True),
+                (f"{_helper_name}.inputs:type", _stream_type),
+                (f"{_helper_name}.inputs:topicName", _topic),
+                (f"{_helper_name}.inputs:frameId", _frame_id),
+                (f"{_info_name}.inputs:enabled", True),
+                (f"{_info_name}.inputs:topicName", _camera_info_topic
+                 or _topic.rsplit("/", 1)[0] + "/camera_info"),
+                (f"{_info_name}.inputs:frameId", _frame_id),
+            ],
+        })
+        _rp_path = f"{_graph_path}/{_rp_name}"
+        _rp_prim = stage.GetPrimAtPath(_rp_path)
+        _camera_rel = _rp_prim.GetRelationship("inputs:cameraPrim")
+        if not _camera_rel:
+            raise RuntimeError(f"cameraPrim relationship missing: {_rp_path}")
+        _camera_rel.SetTargets([_camera_prim.GetPath()])
+        for _src, _dst in (
+            (f"{_run_path}.outputs:step", f"{_rp_path}.inputs:execIn"),
+            (f"{_rp_path}.outputs:execOut", f"{_graph_path}/{_helper_name}.inputs:execIn"),
+            (f"{_rp_path}.outputs:renderProductPath",
+             f"{_graph_path}/{_helper_name}.inputs:renderProductPath"),
+            (f"{_ctx_path}.outputs:context", f"{_graph_path}/{_helper_name}.inputs:context"),
+            (f"{_rp_path}.outputs:execOut", f"{_graph_path}/{_info_name}.inputs:execIn"),
+            (f"{_rp_path}.outputs:renderProductPath",
+             f"{_graph_path}/{_info_name}.inputs:renderProductPath"),
+            (f"{_ctx_path}.outputs:context", f"{_graph_path}/{_info_name}.inputs:context"),
+        ):
+            _p3_connect(_src, _dst)
+        print(f"[P3 Sensors] {_veh.get('name')}: {_camera_prim.GetName()} -> "
+              f"'{_topic}' ({_stream_type}, frame={_frame_id})")
+
+    def _p3_add_camera_info(_veh, _graph_path, _render_product_attr,
+                            _topic, _frame_id):
+        """为已有主相机 Render Product 补充 CameraInfo，避免重复发布图像。"""
+        _ctx_path = f"{_graph_path}/ros2_context"
+        _render_attr_path = str(_render_product_attr)
+        _render_node_path = _render_attr_path.split(".outputs:", 1)[0]
+        _render_node = og.get_node_by_path(_render_node_path)
+        if not _render_node.is_valid():
+            raise RuntimeError(f"render product node missing: {_render_node_path}")
+        _graph_obj = _render_node.get_graph()
+        _info_name = "p3_camera_info_main"
+        og.Controller.edit(_graph_obj, {
+            og.Controller.Keys.CREATE_NODES: [
+                (_info_name, "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+            ],
+            og.Controller.Keys.SET_VALUES: [
+                (f"{_info_name}.inputs:enabled", True),
+                (f"{_info_name}.inputs:topicName", _topic),
+                (f"{_info_name}.inputs:frameId", _frame_id),
+            ],
+        })
+        _info_path = f"{_graph_path}/{_info_name}"
+        for _src, _dst in (
+            (f"{_render_node_path}.outputs:execOut", f"{_info_path}.inputs:execIn"),
+            (_render_attr_path, f"{_info_path}.inputs:renderProductPath"),
+            (f"{_ctx_path}.outputs:context", f"{_info_path}.inputs:context"),
+        ):
+            _p3_connect(_src, _dst)
+        print(f"[P3 Sensors] {_veh.get('name')}: main CameraInfo -> "
+              f"'{_topic}' (frame={_frame_id})")
+
+    def _p3_add_realsense_imu(_veh, _spec, _imu_prim):
+        _veh_root = f"/World/{_veh.get('name')}"
+        _graph_path = f"{_veh_root}/{_spec['chassis_prim'].GetPath().pathString.split('/', 3)[3].split('/Rigid_Bodies/', 1)[0]}/ROS/ROS_IMU"
+        _base_reader_path = f"{_graph_path}/isaac_read_imu_node"
+        _base_reader = og.get_node_by_path(_base_reader_path)
+        if not _base_reader.is_valid():
+            raise RuntimeError(f"IMU graph reader missing: {_base_reader_path}")
+        _graph_obj = _base_reader.get_graph()
+        _reader_name = "p3_read_realsense_imu"
+        _publisher_name = "p3_publish_realsense_imu"
+        _reader_type = _base_reader.get_node_type().get_node_type()
+        _publisher_type = "isaacsim.ros2.bridge.ROS2PublishImu"
+        og.Controller.edit(_graph_obj, {
+            og.Controller.Keys.CREATE_NODES: [
+                (_reader_name, _reader_type),
+                (_publisher_name, _publisher_type),
+            ],
+            og.Controller.Keys.SET_VALUES: [
+                (f"{_reader_name}.inputs:readGravity", True),
+                (f"{_publisher_name}.inputs:topicName",
+                 "/" + _veh.get("topic_prefix", "/vehicle").strip("/") + "/realsense/imu"),
+                (f"{_publisher_name}.inputs:frameId",
+                 _ros_frame(_veh, "realsense_imu", "realsense_imu_link")),
+            ],
+        })
+        _reader_path = f"{_graph_path}/{_reader_name}"
+        _publisher_path = f"{_graph_path}/{_publisher_name}"
+        stage.GetPrimAtPath(_reader_path).GetRelationship("inputs:imuPrim").SetTargets(
+            [_imu_prim.GetPath()])
+        for _src, _dst in (
+            (f"{_graph_path}/on_playback_tick.outputs:tick", f"{_reader_path}.inputs:execIn"),
+            (f"{_reader_path}.outputs:execOut", f"{_publisher_path}.inputs:execIn"),
+            (f"{_reader_path}.outputs:angVel", f"{_publisher_path}.inputs:angularVelocity"),
+            (f"{_reader_path}.outputs:linAcc", f"{_publisher_path}.inputs:linearAcceleration"),
+            (f"{_reader_path}.outputs:orientation", f"{_publisher_path}.inputs:orientation"),
+            (f"{_graph_path}/ros2_context.outputs:context", f"{_publisher_path}.inputs:context"),
+            (f"{_graph_path}/isaac_read_simulation_time.outputs:simulationTime",
+             f"{_publisher_path}.inputs:timeStamp"),
+        ):
+            _p3_connect(_src, _dst)
+        print(f"[P3 Sensors] {_veh.get('name')}: {_imu_prim.GetName()} -> "
+              f"'/{_veh.get('topic_prefix', '/vehicle').strip('/')}/realsense/imu'")
+
+    for _p3_veh in vehicles:
+        if not _p3_veh.get("enabled", True):
+            continue
+        _p3_name = _p3_veh.get("name", "Vehicle")
+        _p3_spec = _semantic_tf_specs.get(_p3_name)
+        if not _p3_spec:
+            continue
+        _p3_effective = _p3_spec["sensor_effective"]
+        _p3_prefix = "/" + _p3_veh.get("topic_prefix", f"/{_p3_name.lower()}").strip("/")
+        _p3_primary_side = str(
+            _p3_veh.get("camera_topics", {}).get("primary_side", "")
+        ).strip().lower()
+        _p3_main_camera_info_topic = (
+            _camera_topic(_p3_veh, _p3_primary_side, "camera_info")
+            if _p3_primary_side in ("left", "right")
+            else f"{_p3_prefix}/camera_info"
+        )
+        _p3_model_root = _p3_spec["model_root"]
+        _p3_graph_path = f"{_p3_model_root}/ROS/ROS_Sensors"
+        _p3_active_camera_path = (
+            _p3_spec["active_camera_prim"].GetPath().pathString
+            if _p3_spec["active_camera_prim"] is not None else "")
+        if (_p3_effective.get("camera_info")
+                and not _p3_spec.get("has_camera_info_helper")
+                and _p3_spec.get("active_render_product_attr") is not None):
+            try:
+                _p3_add_camera_info(
+                    _p3_veh, _p3_graph_path,
+                    _p3_spec["active_render_product_attr"],
+                    _p3_main_camera_info_topic,
+                    _ros_frame(_p3_veh, "camera_optical", "camera_optical_frame"),
+                )
+            except Exception as _p3_info_err:
+                print(f"[P3 Sensors] WARNING {_p3_name}: failed to enable "
+                      f"main CameraInfo: {_p3_info_err}")
+        if _p3_effective.get("stereo"):
+            for _p3_camera in _p3_spec["camera_prims"]:
+                _p3_camera_path = _p3_camera.GetPath().pathString
+                _p3_camera_name = _p3_camera.GetName().lower()
+                if _p3_camera_path == _p3_active_camera_path or "depth" in _p3_camera_name:
+                    continue
+                _p3_side = "right" if "right" in _p3_camera_name else "left"
+                try:
+                    _p3_add_camera_stream(
+                        _p3_veh, _p3_graph_path, _p3_camera, _p3_side,
+                        _camera_topic(_p3_veh, _p3_side, "image"),
+                        _ros_frame(_p3_veh, f"camera_{_p3_side}_optical",
+                                   f"camera_{_p3_side}_optical_frame"),
+                        _camera_info_topic=_camera_topic(
+                            _p3_veh, _p3_side, "camera_info"),
+                    )
+                except Exception as _p3_camera_err:
+                    print(f"[P3 Sensors] WARNING {_p3_name}: failed to enable "
+                          f"{_p3_camera.GetName()}: {_p3_camera_err}")
+        if _p3_effective.get("depth"):
+            for _p3_camera in _p3_spec["camera_prims"]:
+                if "depth" not in _p3_camera.GetName().lower():
+                    continue
+                try:
+                    _p3_add_camera_stream(
+                        _p3_veh, _p3_graph_path, _p3_camera, "depth",
+                        f"{_p3_prefix}/depth/image",
+                        _ros_frame(_p3_veh, "camera_depth_optical",
+                                   "camera_depth_optical_frame"), "depth",
+                    )
+                except Exception as _p3_depth_err:
+                    print(f"[P3 Sensors] WARNING {_p3_name}: failed to enable "
+                          f"Pseudo Depth: {_p3_depth_err}")
+        if _p3_effective.get("realsense_imu"):
+            _p3_active_imu_path = (
+                _p3_spec["active_imu_prim"].GetPath().pathString
+                if _p3_spec["active_imu_prim"] is not None else "")
+            for _p3_imu in _p3_spec["imu_prims"]:
+                if _p3_imu.GetPath().pathString == _p3_active_imu_path:
+                    continue
+                try:
+                    _p3_add_realsense_imu(_p3_veh, _p3_spec, _p3_imu)
+                except Exception as _p3_imu_err:
+                    print(f"[P3 Sensors] WARNING {_p3_name}: failed to enable "
+                          f"RealSense IMU: {_p3_imu_err}")
+
     vehicle_teleop_publishers = {}  # 保存每辆车的 (ctrl_node, pub_node) 元数据
     
     # 从系统中识别合适的 ROS 2 发布器节点类型
@@ -1265,28 +952,39 @@ def main():
         except Exception:
             return False
 
-    for _sg_veh in vehicles:
-        if not _sg_veh.get("enabled", True): continue
-        _sg_name   = _sg_veh.get("name", "")
-        _sg_en_cam = _sg_veh.get("enable_camera", True)
-        _sg_en_lid = _sg_veh.get("enable_lidar",  True)
-        if _sg_en_cam and _sg_en_lid:
-            continue  # 两者都已启用，无需门控
-
+    def _sg_apply_sensor_gate(_sg_veh, _phase=""):
+        """按照 P2 的逐项能力开关门控现有和 P3 新增发布器。"""
+        if not _sg_veh.get("enabled", True):
+            return
+        _sg_name = _sg_veh.get("name", "")
+        _sg_effective = _sg_veh.get("_sensor_effective", {})
         _sg_base = f"/World/{_sg_name}"
         for _sg_prim in stage.Traverse():
             _sg_pp = _sg_prim.GetPath().pathString
-            if not _sg_pp.startswith(_sg_base):
+            if (not _sg_pp.startswith(_sg_base)
+                    or _sg_prim.GetTypeName() != "OmniGraphNode"):
                 continue
-            if _sg_prim.GetTypeName() != "OmniGraphNode":
-                continue
-            _sg_node_name = _sg_prim.GetName().lower()
-            if not _sg_en_cam and "camera_helper" in _sg_node_name:
-                if _sg_set_enabled(_sg_pp, False):
-                    print(f"[Sensors] {_sg_name}: Disabled camera helper '{_sg_pp}'")
-            elif not _sg_en_lid and "lidar_helper" in _sg_node_name:
-                if _sg_set_enabled(_sg_pp, False):
-                    print(f"[Sensors] {_sg_name}: Disabled lidar helper '{_sg_pp}'")
+            _sg_type = _node_type(_sg_prim)
+            _sg_name_lower = _sg_prim.GetName().lower()
+            _sg_enabled = None
+            if "CameraInfoHelper" in _sg_type:
+                _sg_enabled = _sg_effective.get("camera_info", True)
+            elif "CameraHelper" in _sg_type:
+                _sg_kind_attr = _sg_prim.GetAttribute("inputs:type")
+                _sg_kind = str(_sg_kind_attr.Get() or "rgb") if _sg_kind_attr else "rgb"
+                _sg_enabled = _sg_effective.get(
+                    "depth" if _sg_kind == "depth" else "rgb", True)
+            elif "PublishImu" in _sg_type:
+                _sg_enabled = _sg_effective.get(
+                    "realsense_imu" if "realsense" in _sg_name_lower else "imu", True)
+            elif "LidarHelper" in _sg_type:
+                _sg_enabled = _sg_effective.get("lidar", False)
+            if _sg_enabled is not None and _sg_set_enabled(_sg_pp, bool(_sg_enabled)):
+                print(f"[P2 Sensors] {_sg_name}: {'enabled' if _sg_enabled else 'disabled'} "
+                      f"'{_sg_pp}'{_phase}")
+
+    for _sg_veh in vehicles:
+        _sg_apply_sensor_gate(_sg_veh)
 
     # ── ROS 2 驾驶桥接（AckermannDriveStamped + autoware_control_msgs/Control）──
     # Isaac Sim 使用 Python 3.12，但 ROS Humble 中的 rclpy 为 Python 3.10 编译。
@@ -1305,7 +1003,7 @@ def main():
 
         _drv_script = _drv_os.path.join(
             _drv_os.path.dirname(_drv_os.path.abspath(__file__)),
-            "drive_bridge.py")
+            "tools", "drive_bridge.py")
         _drv_env = {
             "HOME":               _drv_os.environ.get("HOME", "/root"),
             "USER":               _drv_os.environ.get("USER", "root"),
@@ -1326,7 +1024,7 @@ def main():
 
         _drv_log_path = _drv_os.path.join(
             _drv_os.path.dirname(_drv_os.path.abspath(__file__)),
-            "drive_bridge.log")
+            "tools", "drive_bridge.log")
         _drive_log = open(_drv_log_path, "w")
         _drive_proc = _drv_sub.Popen(
             ["/usr/bin/python3.10", _drv_script],
@@ -1352,11 +1050,22 @@ def main():
             if _semantic_spec:
                 _odom_parent = _semantic_spec["odom_frame"]
                 _odom_child = _semantic_spec["footprint_frame"]
-                # Odometry 消息描述 Chassis/base_link 位姿。先沿车辆局部 Z 轴向下
-                # 平移到底盘投影点，再由静态 base_footprint->base_link 恢复原位姿。
+                # Odometry 消息描述 base_link 位姿。沿车辆局部坐标系平移到四轮
+                # 中点对应的 base_footprint，再由静态反向外参恢复 base_link。
+                _footprint_offset = _semantic_spec.get(
+                    "footprint_offset", (0.0, 0.0,
+                                          -float(_semantic_spec["base_height"])))
+                _odom_tf_mode = (
+                    "odom_tf_zeroed" if _zero_odom_at_start else "odom_tf")
+                _odom_settle_suffix = (
+                    f"\t{_odom_zeroing_duration_s}"
+                    if _zero_odom_at_start else "")
                 _odom_tf_cmd = (
-                    f"odom_tf\t{_vp}/odom\t{_odom_parent}\t{_odom_child}\t"
-                    f"0\t0\t{-float(_semantic_spec['base_height'])}\n"
+                    f"{_odom_tf_mode}\t{_vp}/odom\t{_odom_parent}\t{_odom_child}\t"
+                    f"{float(_footprint_offset[0])}\t"
+                    f"{float(_footprint_offset[1])}\t"
+                    f"{float(_footprint_offset[2])}"
+                    f"{_odom_settle_suffix}\n"
                 )
             else:
                 _odom_parent = (
@@ -1449,12 +1158,33 @@ def main():
                     _tf_veh.get("rotation_euler", [0.0, 0.0, 0.0]),
                 )
                 _tf_qx, _tf_qy, _tf_qz, _tf_qw = _rpy_deg_to_quat(_tf_rpy)
+                # zero_odom_at_start 时 odom 原点与首帧语义 base_link 重合，
+                # 因而 map -> odom 也要从 CAD 出生原点平移到四轮中心。
+                _tf_map_pos = [float(value) for value in _tf_pos]
+                if _zero_odom_at_start:
+                    _tf_spec = _semantic_tf_specs.get(_tf_vname, {})
+                    _cx, _cy, _cz = _tf_spec.get(
+                        "base_center_offset", (0.0, 0.0, 0.0))
+                    _rx = ((1.0 - 2.0 * (_tf_qy*_tf_qy + _tf_qz*_tf_qz)) * _cx
+                           + 2.0 * (_tf_qx*_tf_qy - _tf_qz*_tf_qw) * _cy
+                           + 2.0 * (_tf_qx*_tf_qz + _tf_qy*_tf_qw) * _cz)
+                    _ry = (2.0 * (_tf_qx*_tf_qy + _tf_qz*_tf_qw) * _cx
+                           + (1.0 - 2.0 * (_tf_qx*_tf_qx + _tf_qz*_tf_qz)) * _cy
+                           + 2.0 * (_tf_qy*_tf_qz - _tf_qx*_tf_qw) * _cz)
+                    _rz = (2.0 * (_tf_qx*_tf_qz - _tf_qy*_tf_qw) * _cx
+                           + 2.0 * (_tf_qy*_tf_qz + _tf_qx*_tf_qw) * _cy
+                           + (1.0 - 2.0 * (_tf_qx*_tf_qx + _tf_qy*_tf_qy)) * _cz)
+                    _tf_map_pos = [
+                        _tf_map_pos[0] + _rx,
+                        _tf_map_pos[1] + _ry,
+                        _tf_map_pos[2] + _rz,
+                    ]
                 _tf_odom_frame = (
                     _tf_vprefix.strip("/") + "/odom" if _tf_namespace_links else "odom"
                 )
                 _map_odom_cmd = (
                     f"tf_pose\t{_map_frame_id}\t{_tf_odom_frame}\t"
-                    f"{float(_tf_pos[0])}\t{float(_tf_pos[1])}\t{float(_tf_pos[2])}\t"
+                    f"{_tf_map_pos[0]}\t{_tf_map_pos[1]}\t{_tf_map_pos[2]}\t"
                     f"{_tf_qx}\t{_tf_qy}\t{_tf_qz}\t{_tf_qw}\n"
                 )
                 _drive_proc.stdin.write(_map_odom_cmd)
@@ -1628,6 +1358,27 @@ def main():
                     if not isinstance(val, str) or not val.strip():
                         continue
                     normalized = "/" + val.strip("/")
+                    _runtime_node_type = node.get_node_type().get_node_type()
+                    _runtime_stream_type = ""
+                    if "inputs:type" in og_attr_names:
+                        try:
+                            _runtime_stream_type = str(
+                                node.get_attribute("inputs:type").get() or "")
+                        except Exception:
+                            pass
+                    _camera_override = _main_camera_topic_override(
+                        veh, _runtime_node_type, _runtime_stream_type, val)
+                    if _camera_override:
+                        new_val = _camera_override
+                        prim.GetAttribute(candidate).Set(new_val)
+                        try:
+                            og_attr.set(new_val)
+                        except Exception:
+                            pass
+                        _og_remap_count += 1
+                        print(f"[ROS2 remap OG] {veh_name}: {prim.GetPath().GetName()}.{candidate} "
+                              f"'{val}' -> '{new_val}'")
+                        continue
                     if normalized not in _sensor_topics_set:
                         continue
                     if val.startswith(topic_prefix):
@@ -1651,6 +1402,7 @@ def main():
         # CameraInfo 辅助节点重新应用统一的规范坐标系，并保留该值供下方周期性防重置流程使用。
         _camera_frame_id = _ros_frame(
             veh, "camera_optical", _camera_frame_leaf)
+        _camera_namespace = topic_prefix.strip("/") + "/"
         _camera_fid_count = 0
         for prim in stage.Traverse():
             p_path = prim.GetPath().pathString
@@ -1668,19 +1420,31 @@ def main():
                     continue
                 _camera_attr = node.get_attribute("inputs:frameId")
                 _camera_usd_attr = prim.GetAttribute("inputs:frameId")
-                if _camera_usd_attr:
-                    _camera_usd_attr.Set(_camera_frame_id)
+                _existing_camera_frame = ""
                 try:
-                    _camera_attr.set(_camera_frame_id)
+                    _existing_camera_frame = str(_camera_attr.get() or "")
                 except Exception:
                     pass
-                _og_frame_id_remaps.append((p_path, "inputs:frameId", _camera_frame_id))
+                # P3 新增的左右目、Pseudo Depth helper 已携带各自的完整语义
+                # frame。只统一旧 USD helper 的 frame，避免把所有相机重新压回主相机。
+                _target_camera_frame = (
+                    _existing_camera_frame
+                    if _existing_camera_frame.startswith(_camera_namespace)
+                    else _camera_frame_id)
+                if _camera_usd_attr:
+                    _camera_usd_attr.Set(_target_camera_frame)
+                try:
+                    _camera_attr.set(_target_camera_frame)
+                except Exception:
+                    pass
+                _og_frame_id_remaps.append(
+                    (p_path, "inputs:frameId", _target_camera_frame))
                 _camera_fid_count += 1
             except Exception:
                 pass
         if _camera_fid_count:
             print(f"[ROS2 camera] {veh_name}: {_camera_fid_count} helper frame ID(s) "
-                  f"set to '{_camera_frame_id}'")
+                  "validated against semantic camera frames")
 
         # ── 坐标系 ID 重映射（播放后的 OG 阶段）───────────────────────────────
         # 扫描名称中包含 "FrameId" 的所有 OmniGraph 节点属性，将基础值
@@ -1781,26 +1545,7 @@ def main():
 
     # ── 播放后禁用传感器辅助节点（此时 OG 运行时已完全初始化）────────────────
     for _sg_veh in vehicles:
-        if not _sg_veh.get("enabled", True): continue
-        _sg_name   = _sg_veh.get("name", "")
-        _sg_en_cam = _sg_veh.get("enable_camera", True)
-        _sg_en_lid = _sg_veh.get("enable_lidar",  True)
-        if _sg_en_cam and _sg_en_lid:
-            continue
-        _sg_base = f"/World/{_sg_name}"
-        for _sg_prim in stage.Traverse():
-            _sg_pp = _sg_prim.GetPath().pathString
-            if not _sg_pp.startswith(_sg_base):
-                continue
-            if _sg_prim.GetTypeName() != "OmniGraphNode":
-                continue
-            _sg_node_name = _sg_prim.GetName().lower()
-            if not _sg_en_cam and "camera_helper" in _sg_node_name:
-                if _sg_set_enabled(_sg_pp, False):
-                    print(f"[Sensors] {_sg_name}: Disabled camera helper '{_sg_pp}' (post-play)")
-            elif not _sg_en_lid and "lidar_helper" in _sg_node_name:
-                if _sg_set_enabled(_sg_pp, False):
-                    print(f"[Sensors] {_sg_name}: Disabled lidar helper '{_sg_pp}' (post-play)")
+        _sg_apply_sensor_gate(_sg_veh, " (post-play)")
 
     # ── 地图生成与发布 ─────────────────────────────────────────────────────────
     # 渲染一帧俯视正交语义分割图，根据环境网格构建 nav_msgs/OccupancyGrid，
@@ -1999,7 +1744,7 @@ def main():
 
             _gnss_script = _gnss_os.path.join(
                 _gnss_os.path.dirname(_gnss_os.path.abspath(__file__)),
-                "gnss_bridge.py")
+                "tools", "gnss_bridge.py")
             # 使用最小化环境，避免 Isaac Sim 的 LD_LIBRARY_PATH 和 PYTHONPATH
             # 污染 Python 3.10 子进程。
             _gnss_env = {
@@ -2021,7 +1766,7 @@ def main():
 
             _gnss_log_path = _gnss_os.path.join(
                 _gnss_os.path.dirname(_gnss_os.path.abspath(__file__)),
-                "gnss_bridge.log")
+                "tools", "gnss_bridge.log")
             _gnss_log = open(_gnss_log_path, "w")
             _gnss_proc = _gnss_subprocess.Popen(
                 ["/usr/bin/python3.10", _gnss_script],
@@ -2042,7 +1787,9 @@ def main():
 
             for _gv in vehicles:
                 if not _gv.get("enabled", True):     continue
-                if not _gv.get("enable_gnss", True): continue
+                if not _gv.get("_sensor_effective", {}).get(
+                        "gnss", _gv.get("enable_gnss", True)):
+                    continue
                 _gvname = _gv.get("name", "")
                 _gvpfx  = "/" + _gv.get("topic_prefix", f"/{_gvname.lower()}").strip("/")
                 _gtopic = _gvpfx + "/gnss"
@@ -2080,7 +1827,10 @@ def main():
                 if not node.is_valid(): continue
                 n_type = node.get_node_type().get_node_type()
                 if any(x in n_type for x in ["IsaacImuSensor", "ReadIMU"]):
-                    imu_path = p_path
+                    # HUD 默认显示车体主 IMU；P3 的 RealSense IMU 通过独立话题
+                    # 提供，不能覆盖主 IMU 的状态来源。
+                    if imu_path is None or "p3_" not in p_path:
+                        imu_path = p_path
                 elif any(x in n_type for x in ["ComputeOdometry", "IsaacComputeOdometry"]):
                     odom_path = p_path
             except Exception:
@@ -2699,7 +2449,8 @@ def main():
     _rt_wall_last = time.monotonic()   # 上次实时因子采样时的墙上时间（按区间计算）
     _rt_iter_last = 0                  # 上次实时因子采样时的迭代次数
     _ctrl_mode_last_pub = 0.0  # 上次周期性发布 control_mode 的墙上时间
-    _wheel_tf_frame_skip = max(1, int(round(float(app_freq) / _wheel_tf_rate_hz)))
+    _wheel_tf_frame_skip = max(
+        1, int(round(float(app_freq) / _wheel_tf_rate_hz)))
 
     if headless_mode:
         _veh_names = list(veh_ctrl_mode.keys())
@@ -2825,16 +2576,17 @@ def main():
             print("[Sim] Simulation restarted.")
             continue
 
-        # P1：轮胎刚体的 USD 原点位于车体中心，不能直接发布。这里读取轮胎
-        # 视觉根 Mesh 的实时姿态，以 chassis/base_link 为父坐标系发布动态 TF。
-        # 视觉 Mesh 原点位于轮轴中心，并会继承转向与滚动关节的姿态。
+        # 轮轴中心使用固定 authored/YAML 外参；Wheel 刚体只提供相对于启动
+        # 姿态的滚动角。drive_bridge 会将时间戳替换为同车辆最新 odom 时间，
+        # 保证 RViz 能在同一时刻拼接完整 TF 链。
         if (_tf_semantic_frames and _ros_bridge_enabled
                 and _drive_proc is not None and _drive_proc.poll() is None
                 and iteration % _wheel_tf_frame_skip == 0):
             try:
-                _wheel_sim_time = max(0.0, float(timeline.get_current_time()))
-                _wheel_sec = int(_wheel_sim_time)
-                _wheel_nanosec = int(round((_wheel_sim_time - _wheel_sec) * 1.0e9))
+                _wheel_time = max(0.0, float(timeline.get_current_time()))
+                _wheel_sec = int(_wheel_time)
+                _wheel_nanosec = int(
+                    round((_wheel_time - _wheel_sec) * 1.0e9))
                 if _wheel_nanosec >= 1000000000:
                     _wheel_sec += 1
                     _wheel_nanosec -= 1000000000
@@ -2842,10 +2594,16 @@ def main():
                 for _wheel_spec in _semantic_tf_specs.values():
                     _wheel_parent = _wheel_spec["base_frame"]
                     _wheel_chassis = _wheel_spec["chassis_prim"]
-                    for _wheel_child, _wheel_prim in _wheel_spec["wheels"]:
-                        if not _wheel_prim.IsValid():
+                    for (_wheel_child, _wheel_body,
+                         _wheel_initial_pose, _wheel_xyz) in _wheel_spec["wheels"]:
+                        if not _wheel_body.IsValid():
                             continue
-                        _wheel_pose = _relative_pose(_wheel_chassis, _wheel_prim)
+                        _wheel_current_pose = _relative_pose(
+                            _wheel_chassis, _wheel_body)
+                        _wheel_pose = (
+                            *_wheel_xyz,
+                            *_wheel_rotation(
+                                _wheel_current_pose, _wheel_initial_pose))
                         _wheel_pose_text = "\t".join(
                             f"{float(value):.12g}" for value in _wheel_pose)
                         _wheel_commands.append(

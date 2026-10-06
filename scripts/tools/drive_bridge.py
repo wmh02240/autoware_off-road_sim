@@ -9,6 +9,7 @@ Isaac Sim 使用 Python 3.12，但 ROS Humble 中的 rclpy 是为 Python 3.10 �
   执行 ``start`` 之前：
     sub<TAB>veh_name<TAB>drive_topic<TAB>control_topic
     odom_tf<TAB>odom_topic<TAB>parent_frame<TAB>child_frame[<TAB>offset_x<TAB>offset_y<TAB>offset_z]
+    odom_tf_zeroed<TAB>odom_topic<TAB>parent_frame<TAB>child_frame[<TAB>offset_x<TAB>offset_y<TAB>offset_z<TAB>settle_s]
   执行 ``start`` 之后（延迟命令，例如物理预热完成后地图数据才就绪）：
     map<TAB>width<TAB>height<TAB>resolution<TAB>orig_x<TAB>orig_y<TAB>data_b64
     tf<TAB>parent_frame<TAB>child_frame
@@ -52,11 +53,12 @@ except Exception as _e:
     sys.stderr.write(f"[drive_bridge] tf2 buffer init skipped: {_e}\n")
 
 _pending_subs = []   # (veh_name, drive_topic, control_topic) 列表
-_pending_odom_tfs = []  # (odom_topic, parent_frame, child_frame, ox, oy, oz) 列表
+_pending_odom_tfs = []  # (topic, parent, child, ox, oy, oz, zero_at_start, settle_s)
 _pending_maps = []   # 原始字段列表 [width, height, res, ox, oy, b64]
 _pending_tfs  = []   # (parent_frame, child_frame) 列表
 _pending_pose_tfs = []  # (parent, child, x, y, z, qx, qy, qz, qw) 列表
 _ctrl_mode_pubs = {}  # 映射：veh_name -> rclpy Publisher<Int32>
+_latest_odom_stamps = {}  # frame 命名空间 -> (sec, nanosec)
 
 # ── 阶段 1：从标准输入读取注册信息，直到收到 "start" ─────────────────────────
 for _line in sys.stdin:
@@ -69,9 +71,14 @@ for _line in sys.stdin:
     _cmd = _parts[0]
     if _cmd == "sub" and len(_parts) == 4:
         _pending_subs.append((_parts[1], _parts[2], _parts[3]))
-    elif _cmd == "odom_tf" and len(_parts) in (4, 7):
+    elif _cmd in ("odom_tf", "odom_tf_zeroed") and len(_parts) in (4, 7, 8):
         _offset = tuple(float(v) for v in _parts[4:7]) if len(_parts) == 7 else (0.0, 0.0, 0.0)
-        _pending_odom_tfs.append((_parts[1], _parts[2], _parts[3], *_offset))
+        if len(_parts) == 8:
+            _offset = tuple(float(v) for v in _parts[4:7])
+        _settle_s = float(_parts[7]) if len(_parts) == 8 else 0.0
+        _pending_odom_tfs.append(
+            (_parts[1], _parts[2], _parts[3], *_offset,
+             _cmd == "odom_tf_zeroed", _settle_s))
     elif _cmd == "map" and len(_parts) == 7:
         _pending_maps.append(_parts[1:])
     elif _cmd == "tf" and len(_parts) == 3:
@@ -135,12 +142,42 @@ if _pending_odom_tfs:
     except Exception as _e:
         sys.stderr.write(f"[drive_bridge] dynamic TF broadcaster failed: {_e}\n")
 
-for _odom_topic, _parent_frame, _child_frame, _offset_x, _offset_y, _offset_z in _pending_odom_tfs:
+for (_odom_topic, _parent_frame, _child_frame,
+     _offset_x, _offset_y, _offset_z,
+     _zero_at_start, _settle_s) in _pending_odom_tfs:
     try:
         from nav_msgs.msg import Odometry
         from geometry_msgs.msg import TransformStamped
 
-        def _make_odom_tf_cb(parent_frame, child_frame, offset):
+        def _make_odom_tf_cb(
+                parent_frame, child_frame, offset, zero_at_start, settle_s):
+            origin = {"position": None, "orientation": None}
+
+            def _quat_multiply(a, b):
+                ax, ay, az, aw = a
+                bx, by, bz, bw = b
+                return (
+                    aw * bx + ax * bw + ay * bz - az * by,
+                    aw * by - ax * bz + ay * bw + az * bx,
+                    aw * bz + ax * by - ay * bx + az * bw,
+                    aw * bw - ax * bx - ay * by - az * bz,
+                )
+
+            def _rotate(q, vector):
+                qx, qy, qz, qw = q
+                vx, vy, vz = vector
+                return (
+                    (1.0 - 2.0 * (qy * qy + qz * qz)) * vx
+                    + 2.0 * (qx * qy - qz * qw) * vy
+                    + 2.0 * (qx * qz + qy * qw) * vz,
+                    2.0 * (qx * qy + qz * qw) * vx
+                    + (1.0 - 2.0 * (qx * qx + qz * qz)) * vy
+                    + 2.0 * (qy * qz - qx * qw) * vz,
+                    2.0 * (qx * qz - qy * qw) * vx
+                    + 2.0 * (qy * qz + qx * qw) * vy
+                    + (1.0 - 2.0 * (qx * qx + qy * qy)) * vz,
+                )
+
             def _cb(msg):
                 if _tf_broadcaster is None:
                     return
@@ -148,11 +185,51 @@ for _odom_topic, _parent_frame, _child_frame, _offset_x, _offset_y, _offset_z in
                 tf_msg.header.stamp = msg.header.stamp
                 tf_msg.header.frame_id = parent_frame
                 tf_msg.child_frame_id = child_frame
+                _frame_namespace = parent_frame.rpartition("/")[0]
+                _latest_odom_stamps[_frame_namespace] = (
+                    int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
                 # offset 使用车辆局部坐标。先用里程计四元数将其旋转到 odom，
                 # 再叠加位姿平移；用于从 Chassis/base_link 位姿得到 base_footprint。
                 ox, oy, oz = offset
                 q = msg.pose.pose.orientation
                 qx, qy, qz, qw = q.x, q.y, q.z, q.w
+                norm = max((qx*qx + qy*qy + qz*qz + qw*qw) ** 0.5, 1.0e-12)
+                current_q = (qx / norm, qy / norm, qz / norm, qw / norm)
+                if zero_at_start:
+                    # 原始里程计描述 CAD Chassis。先移动到语义 base_link 的
+                    # 四轮中心，再以首帧 base_link 位姿建立新的 odom 原点。
+                    bx, by, bz = _rotate(current_q, (ox, oy, 0.0))
+                    current_base = (
+                        msg.pose.pose.position.x + bx,
+                        msg.pose.pose.position.y + by,
+                        msg.pose.pose.position.z + bz,
+                    )
+                    stamp_s = (float(msg.header.stamp.sec)
+                               + float(msg.header.stamp.nanosec) * 1.0e-9)
+                    calibrating = stamp_s <= settle_s
+                    if origin["position"] is None or calibrating:
+                        origin["position"] = current_base
+                        origin["orientation"] = current_q
+                    initial_q = origin["orientation"]
+                    initial_q_inv = (
+                        -initial_q[0], -initial_q[1],
+                        -initial_q[2], initial_q[3])
+                    relative_q = _quat_multiply(initial_q_inv, current_q)
+                    delta_world = tuple(
+                        current_base[index] - origin["position"][index]
+                        for index in range(3))
+                    relative_base = _rotate(initial_q_inv, delta_world)
+                    fx, fy, fz = _rotate(relative_q, (0.0, 0.0, oz))
+                    tf_msg.transform.translation.x = relative_base[0] + fx
+                    tf_msg.transform.translation.y = relative_base[1] + fy
+                    tf_msg.transform.translation.z = relative_base[2] + fz
+                    tf_msg.transform.rotation.x = relative_q[0]
+                    tf_msg.transform.rotation.y = relative_q[1]
+                    tf_msg.transform.rotation.z = relative_q[2]
+                    tf_msg.transform.rotation.w = relative_q[3]
+                    with _tf_broadcaster_lock:
+                        _tf_broadcaster.sendTransform(tf_msg)
+                    return
                 rx = ((1.0 - 2.0 * (qy * qy + qz * qz)) * ox
                       + 2.0 * (qx * qy - qz * qw) * oy
                       + 2.0 * (qx * qz + qy * qw) * oz)
@@ -175,12 +252,14 @@ for _odom_topic, _parent_frame, _child_frame, _offset_x, _offset_y, _offset_z in
             _odom_topic,
             _make_odom_tf_cb(
                 _parent_frame, _child_frame,
-                (_offset_x, _offset_y, _offset_z)),
+                (_offset_x, _offset_y, _offset_z),
+                _zero_at_start, _settle_s),
             10,
         )
         sys.stderr.write(
             f"[drive_bridge] TF from '{_odom_topic}': "
-            f"{_parent_frame} -> {_child_frame}\n"
+            f"{_parent_frame} -> {_child_frame}"
+            f"{f' (zeroed after {_settle_s:g}s settling)' if _zero_at_start else ''}\n"
         )
     except Exception as _e:
         sys.stderr.write(
@@ -263,7 +342,7 @@ def _publish_tf(parent, child, pose=None):
 
 
 def _publish_dynamic_tf(parent, child, sec, nanosec, pose):
-    """发布带仿真时间戳的动态 TF，用于轮胎等运动部件。"""
+    """使用同车辆最新里程计时间戳发布轮胎等动态 TF。"""
     global _tf_broadcaster
     try:
         from tf2_ros import TransformBroadcaster
@@ -271,8 +350,12 @@ def _publish_dynamic_tf(parent, child, sec, nanosec, pose):
         if _tf_broadcaster is None:
             _tf_broadcaster = TransformBroadcaster(_node)
         _t = TransformStamped()
-        _t.header.stamp.sec = int(sec)
-        _t.header.stamp.nanosec = int(nanosec)
+        _frame_namespace = parent.rpartition("/")[0]
+        _odom_stamp = _latest_odom_stamps.get(_frame_namespace)
+        if _odom_stamp is None:
+            return
+        _t.header.stamp.sec = _odom_stamp[0]
+        _t.header.stamp.nanosec = _odom_stamp[1]
         _t.header.frame_id = parent
         _t.child_frame_id = child
         x, y, z, qx, qy, qz, qw = (float(value) for value in pose)

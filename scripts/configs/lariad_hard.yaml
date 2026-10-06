@@ -29,19 +29,22 @@ tf_settings:
   # 使用显式 ROS 语义坐标系，避免把 CAD/PhysX 刚体原点直接作为 TF 原点。
   semantic_frames: true
   # 原始 USD 的 TransformTree 会把四个轮子刚体原点发布在车体原点；
-  # P0 阶段先停用该错误 TF，P1 阶段再按轮轴中心重建动态车轮 TF。
+  # P0 阶段先停用该错误 TF，P1 阶段按 authored 轮轴中心和物理滚动角重建。
   disable_builtin_transform_tree: true
-  # 从轮胎视觉中心提取实时姿态，以较低频率发布四轮动态 TF。
+  # 轮轴位置来自 authored/YAML 外参，滚动角来自 Wheel 刚体姿态增量。
   wheel_tf_rate_hz: 30.0
   publish_map_to_odom: true
+  # 物理稳定阶段结束时的里程计作为局部原点，使 odom 与语义 base_link 重合。
+  zero_odom_at_start: true
+  # 启动后车辆会先受重力落地；在该窗口内持续校准，稳定后冻结 odom 原点。
+  odom_zeroing_duration_s: 1.0
   map_frame: "map"
 
 environment:
   asset: "external_assets/lariad_offroad_nav/compat/hard.usda"
   scale: [1.0, 1.0, 1.0]
   rotation_euler: [0.0, 0.0, -179.6158]
-  # launch_sim.py authors scale/rotate/translate in this order; this local
-  # translation reproduces the source map's final world translation.
+  # launch_sim.py authors scale/rotate/translate in this order; this local translation reproduces the source map's final world translation.
   translation: [-0.0089229767, 0.0000598346, 0.0]
   frictions:
     - name: "GeneratedTerrainMaterial"
@@ -53,14 +56,39 @@ environment:
 
 vehicles:
   - name: "Ego_Vehicle"
-    enabled: false
+    enabled: true
     asset: "assets/vehicles/roboracer_max.usd"
     topic_prefix: "/ego"
+    camera_topics:
+      left:
+        image: "left/image_raw"
+        camera_info: "left/camera_info"
+      right:
+        image: "right/image_raw"
+        camera_info: "right/camera_info"
     spawn_position: [-0.3063, 23.3731, 0.15]
     spawn_orientation: [0.0, 0.0, -90.0]
-    enable_camera: true
+    # 期望启用项与模型固有能力分开声明；启动器会逐项校验并输出能力报告。
+    enable_rgb: true
+    enable_depth: true
+    enable_camera_info: true
+    enable_stereo: true
+    enable_imu: true
+    enable_realsense_imu: true
     enable_lidar: true
     enable_gnss: true
+    enable_radar: false
+    gnss_mode: "simulated"
+    sensor_capabilities:
+      rgb: true
+      depth: true
+      camera_info: true
+      stereo: true
+      imu: true
+      realsense_imu: true
+      lidar: true
+      gnss: true
+      radar: false
     ros_frames:
       base_footprint: "base_footprint"
       base_link: "base_link"
@@ -82,14 +110,73 @@ vehicles:
       rear_right_wheel: "rear_right_wheel_link"
 
   - name: "Opponent_Vehicle"
-    enabled: true
+    enabled: false
     asset: "assets/vehicles/roboracer_offroad.usd"
     topic_prefix: "/opponent"
+    camera_topics:
+      # OffRoad USD 已接入 ROS 的主相机就是 ZED 左目。
+      primary_side: "left"
+      left:
+        image: "left/image_raw"
+        camera_info: "left/camera_info"
+      right:
+        image: "right/image_raw"
+        camera_info: "right/camera_info"
     spawn_position: [-0.3063, 23.3731, 0.15]
     spawn_orientation: [0.0, 0.0, -90.0]
-    enable_camera: true
-    enable_lidar: true
+    enable_rgb: true
+    enable_depth: true
+    enable_camera_info: true
+    enable_stereo: true
+    enable_imu: true
+    enable_realsense_imu: false
+    enable_lidar: false
     enable_gnss: true
+    enable_radar: false
+    gnss_mode: "simulated"
+    # ROS 语义 base_link 位于四个轮轴中心的正上方，而不是 CAD Chassis 原点。
+    # 这些值覆盖 USD 自动推导结果；frames 中可按 ROS frame 名继续覆盖任意外参。
+    tf_extrinsics:
+      # 来自 roboracer_offroad.usd 的 authored（物理求解前）静态几何。
+      base_link_center_xy: [0.120745121, -0.000054712]
+      base_link_height: 0.049506704
+      # 以下 xyz 均以语义 base_link 为父坐标系，四元数顺序为 [x, y, z, w]。
+      frames:
+        chassis_link:
+          xyz: [0.0, 0.0, 0.0]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        front_left_wheel_link:
+          xyz: [0.120144182, 0.109708920, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        front_right_wheel_link:
+          xyz: [0.120144182, -0.109708909, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        rear_left_wheel_link:
+          xyz: [-0.120144162, 0.109708920, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        rear_right_wheel_link:
+          xyz: [-0.120144203, -0.109708929, 0.001561098]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        zed_left_camera_frame:
+          xyz: [0.145146404, 0.025060562, 0.151679508]
+          quaternion_xyzw: [-0.010001214, 0.999887464, 0.010001213, -0.005001170]
+        zed_right_camera_frame:
+          xyz: [0.145146404, -0.024951134, 0.151679508]
+          quaternion_xyzw: [-0.010001214, 0.999887464, 0.010001213, -0.005001170]
+        zed_imu_link:
+          xyz: [0.145146404, 0.025060562, 0.151679508]
+          # Isaac IMU 消息已按车辆轴向表达：X 前、Y 左、Z 上。
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+    sensor_capabilities:
+      rgb: true
+      depth: true
+      camera_info: true
+      stereo: true
+      imu: true
+      realsense_imu: false
+      lidar: false
+      gnss: true
+      radar: false
     ros_frames:
       base_footprint: "base_footprint"
       base_link: "base_link"

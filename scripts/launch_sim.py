@@ -1,205 +1,28 @@
 import os
-import argparse
 import collections
 import time
 import subprocess
 import sys
-import yaml
-try:
-    from isaacsim import SimulationApp
-except ImportError:
-    from omni.isaac.kit import SimulationApp
+from tools.launch_common import bootstrap
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch IsaacSim with specified assets")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=os.path.join(os.path.dirname(__file__), "configs", "pumptrack_simple.yaml"),
-        help="Path to configuration file"
+    launch = bootstrap(
+        os.path.join(os.path.dirname(__file__), "configs", "pumptrack_simple.yaml"),
+        "Launch IsaacSim with specified assets",
     )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        default=False,
-        help="Run without a display window. All vehicles default to ROS2_CONTROL mode.",
-    )
-    # 在解析本启动器自身选项的同时，为 SimulationApp 保留 Kit/Carbonite 参数
-    #（例如 Tracy 分析器开关）。
-    args, _kit_extra_args = parser.parse_known_args()
-    headless_mode = args.headless
-
-    config_path = os.path.abspath(args.config)
-    print(f"Loading configuration from: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-
-    # 以仓库根目录为基准解析路径
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    env_asset_path = os.path.join(repo_root, config.get("environment_asset", ""))
-    print(f"Environment asset: {env_asset_path}")
-
-    # 解析网络配置
-    network_setup = config.get("network_setup", {})
-    ros2_domain_id = network_setup.get("ros2_domain_id", 0)
-    network_interface = network_setup.get("network_interface", "auto")
-    ros2_cmd_timeout_s = float(network_setup.get("ros2_cmd_timeout_s", 1.5))
-
-    ui_cfg = config.get("user_interface", {})
-    _ui_viewport_mode = not headless_mode and bool(ui_cfg.get("viewport_mode", False))
-    _ui_split_screen  = not headless_mode and bool(ui_cfg.get("split_screen", False))
-    # 车辆启动时的默认控制模式（非无头模式）。"KEYBOARD" → KEYBOARD_CONTROL，
-    # "ROS2_CONTROL" → ROS2_CONTROL。无头模式下由于没有键盘，
-    # 下方逻辑始终会覆盖为 ROS2_CONTROL。
-    _ui_default_ctrl_mode = str(ui_cfg.get("default_control_mode", "KEYBOARD")).strip().upper()
-
-    # ── CycloneDDS 设置 ────────────────────────────────────────────────────
-    # 为稳妥起见显式设置 RMW，以防 Isaac Sim 自带解释器启动的 Python
-    # 没有继承 Docker 环境变量。
-    os.environ["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
-    os.environ["ROS_DOMAIN_ID"] = str(ros2_domain_id)
-
-    if network_interface != "auto":
-        # 将显式 IP 或网卡名称解析为 IP 地址
-        def _resolve_ip(iface):
-            if "." in iface:          # 已经是 IP 字符串
-                return iface
-            try:                      # 通过 fcntl SIOCGIFADDR 将网卡名称转换为 IP
-                import socket, fcntl, struct
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                packed = fcntl.ioctl(s.fileno(), 0x8915,
-                                     struct.pack("256s", iface[:15].encode()))
-                return socket.inet_ntoa(packed[20:24])
-            except Exception:
-                return iface          # 后备方案：原样使用该字符串
-
-        lan_ip = _resolve_ip(network_interface)
-        _cyclone_xml = (
-            '<?xml version="1.0" encoding="UTF-8" ?>\n'
-            '<CycloneDDS><Domain><General>\n'
-            f'  <NetworkInterfaceAddress>{lan_ip}</NetworkInterfaceAddress>\n'
-            '</General></Domain></CycloneDDS>\n'
-        )
-        _cyclone_xml_path = "/tmp/cyclone_hil.xml"
-        with open(_cyclone_xml_path, "w") as _f:
-            _f.write(_cyclone_xml)
-        os.environ["CYCLONEDDS_URI"] = f"file://{_cyclone_xml_path}"
-        print(f"[ROS2] CycloneDDS pinned to interface: {lan_ip}")
-        print(f"[ROS2] CYCLONEDDS_URI = {os.environ['CYCLONEDDS_URI']}")
-    else:
-        print("[ROS2] CycloneDDS using automatic interface/multicast discovery")
-
-    print(f"[ROS2] RMW_IMPLEMENTATION=rmw_cyclonedds_cpp  ROS_DOMAIN_ID={ros2_domain_id}")
+    config = launch["config"]
+    repo_root = launch["repo_root"]
+    headless_mode = launch["headless_mode"]
+    ros2_cmd_timeout_s = launch["ros2_cmd_timeout_s"]
+    simulation_app = launch["simulation_app"]
+    carb_settings = launch["carb_settings"]
+    viewport_opts = launch["viewport_opts"]
+    render_res = launch["render_res"]
+    _ui_viewport_mode = launch["ui_viewport_mode"]
+    _ui_split_screen = launch["ui_split_screen"]
+    _ui_default_ctrl_mode = launch["ui_default_ctrl_mode"]
 
     # 初始化仿真应用
-    viewport_opts = config.get("graphics_settings", {})
-    render_res = viewport_opts.get("render_resolution", [2560, 1440])
-
-    # 此操作必须在导入其他 omni 模块之前完成。
-    # 加载完整的 Isaac Sim Experience（与 isaac-sim.sh 使用相同 Kit 配置），
-    # 以提供全部面板、编辑器和扩展，而不是最精简的 Python 独立界面。
-    # CARB_APP_PATH 指向 .../release/kit；Experience 的 Kit 文件位于同级的
-    # .../release/apps/ 目录，因此需要向上返回一级。
-    _carb_app_path = os.environ.get("CARB_APP_PATH", "")
-    _release_dir = os.path.dirname(_carb_app_path)  # 对应路径：.../release
-    _exp_full = os.path.join(_release_dir, "apps", "isaacsim.exp.full.kit")
-    if not os.path.exists(_exp_full):
-        # 后备方案：在 apps/ 中查找任意 Isaac Sim 完整版 Kit 文件
-        _apps_dir = os.path.join(_release_dir, "apps")
-        _candidates = [f for f in os.listdir(_apps_dir) if "full" in f and f.endswith(".kit")] if os.path.isdir(_apps_dir) else []
-        if _candidates:
-            _exp_full = os.path.join(_apps_dir, sorted(_candidates)[0])
-            print(f"[SimApp] Using experience: {_exp_full}")
-        else:
-            print(f"[SimApp] Warning: isaacsim.exp.full.kit not found in {_apps_dir}, falling back to default")
-            _exp_full = ""
-    _sim_cfg = {"headless": headless_mode, "experience": _exp_full}
-
-    # Tracy 必须在 SimulationApp 启动前配置。YAML 开关可避免常规运行承担
-    # 分析器开销，而上面的 parse_known_args 仍允许从命令行手动传入 Kit 分析参数。
-    _profiling_cfg = config.get("profiling", {})
-    _tracy_cfg = _profiling_cfg.get("tracy", {})
-    _tracy_enabled = bool(_tracy_cfg.get("enabled", False))
-    if _tracy_enabled:
-        _sim_cfg["profiler_backend"] = ["tracy"]
-        _tracy_gpu = bool(_tracy_cfg.get("gpu", True))
-        _tracy_args = [
-            "--enable", "omni.kit.profiler.tracy",
-            "--/profiler/enabled=true",
-            "--/app/profilerBackend=tracy",
-            "--/app/profileFromStart=true",
-        ]
-        if _tracy_gpu:
-            _tracy_args.extend([
-                "--/profiler/gpu=true",
-                "--/profiler/gpu/tracyInject/enabled=true",
-            ])
-        for _tracy_arg in _tracy_args:
-            if _tracy_arg not in sys.argv:
-                sys.argv.append(_tracy_arg)
-        print(f"[Profile] Tracy enabled (GPU trace: {_tracy_gpu}). "
-              "Open the bundled Tracy UI and click Connect.")
-    if not headless_mode:
-        _sim_cfg["width"]           = render_res[0]
-        _sim_cfg["height"]          = render_res[1]
-        _sim_cfg["display_options"] = 3287  # 3286（默认值）| 1（显示 FPS）
-    simulation_app = SimulationApp(_sim_cfg)
-    
-    # 单独强制设置输出渲染器分辨率（与窗口大小解耦时很有用）
-    import carb
-    carb_settings = carb.settings.get_settings()
-
-    if not headless_mode:
-        carb_settings.set_int("/app/renderer/resolution/width", render_res[0])
-        carb_settings.set_int("/app/renderer/resolution/height", render_res[1])
-        # 切换视口 FPS 显示
-        carb_settings.set_bool("/app/window/showFps", True)
-        carb_settings.set_bool("/app/viewport/showFps", True)
-        carb_settings.set_bool("/exts/omni.kit.viewport.window/fps", True)
-        # DLSS 超分辨率 + 帧生成（FPS 倍增器 x2）
-        # /rtx/post/aa/op：0=无，1=TAA，2=FXAA，3=DLSS，4=DLAA
-        # /rtx/post/dlss/execMode：0=性能（约 2x），1=平衡，2=质量，3=超高性能
-        # /rtx-transient/dlssg/enabled：DLSS-G 帧生成，即界面中的 FPS 倍增器
-        if viewport_opts.get("enable_DLSS_FPS_Multiplier_x2", False):
-            carb_settings.set_int("/rtx/post/aa/op", 3)
-            carb_settings.set_int("/rtx/post/dlss/execMode", 0)
-            carb_settings.set_bool("/rtx-transient/dlssg/enabled", True)
-            print("[Renderer] DLSS Performance + FPS Multiplier x2 (DLSS-G) enabled.")
-        if viewport_opts.get("disable_shadows", False):
-            carb_settings.set_bool("/rtx/shadows/enabled", False)
-            print("[Renderer] Shadows disabled.")
-        if viewport_opts.get("disable_ambient_occlusion", False):
-            carb_settings.set_bool("/rtx/ambientOcclusion/enabled", False)
-            print("[Renderer] Ambient occlusion disabled.")
-        if viewport_opts.get("disable_reflections", False):
-            carb_settings.set_bool("/rtx/reflections/enabled", False)
-            print("[Renderer] Reflections disabled.")
-        print(f"Configured Viewport Render Resolution to {render_res[0]}x{render_res[1]} with FPS counter")
-
-        # 视口模式：启动时隐藏视口以外的所有面板，使它们从一开始就不向用户显示，
-        # 而不是显示后再关闭。
-        if _ui_viewport_mode:
-            try:
-                import omni.ui as _ui_startup
-                for _pname in ["Stage", "Content", "Console", "Property", "Layer",
-                               "Semantics Schema Editor", "Action Graph",
-                               "Render Settings", "Statistics", "Profiler",
-                               "Animation Graph", "Physics", "Replicator",
-                               "Material Graph", "Robot Inspector"]:
-                    try:
-                        _ui_startup.Workspace.show_window(_pname, False)
-                    except Exception:
-                        pass
-                carb_settings.set_bool("/app/window/showMenu", False)
-                print("[UI] Viewport mode: panels suppressed at startup.")
-            except Exception as _vms_err:
-                print(f"[UI] Viewport mode startup error: {_vms_err}")
-
-    # 阻止 Isaac Sim Full 自动向 Stage 添加 defaultLight。
-    # 环境 USD 已包含 DomeLight，第二盏灯会改变场景效果。
-    carb_settings.set_bool("/app/stage/generateDefaultLight", False)
 
     import omni.usd
     from pxr import UsdGeom, Gf, Sdf
@@ -942,7 +765,7 @@ def main():
 
         _drv_script = _drv_os.path.join(
             _drv_os.path.dirname(_drv_os.path.abspath(__file__)),
-            "drive_bridge.py")
+            "tools", "drive_bridge.py")
         _drv_env = {
             "HOME":               _drv_os.environ.get("HOME", "/root"),
             "USER":               _drv_os.environ.get("USER", "root"),
@@ -963,7 +786,7 @@ def main():
 
         _drv_log_path = _drv_os.path.join(
             _drv_os.path.dirname(_drv_os.path.abspath(__file__)),
-            "drive_bridge.log")
+            "tools", "drive_bridge.log")
         _drive_log = open(_drv_log_path, "w")
         _drive_proc = _drv_sub.Popen(
             ["/usr/bin/python3.10", _drv_script],
@@ -1514,7 +1337,7 @@ def main():
 
             _gnss_script = _gnss_os.path.join(
                 _gnss_os.path.dirname(_gnss_os.path.abspath(__file__)),
-                "gnss_bridge.py")
+                "tools", "gnss_bridge.py")
             # 使用最小化环境，避免 Isaac Sim 的 LD_LIBRARY_PATH 和 PYTHONPATH
             # 污染 Python 3.10 子进程。
             _gnss_env = {
@@ -1536,7 +1359,7 @@ def main():
 
             _gnss_log_path = _gnss_os.path.join(
                 _gnss_os.path.dirname(_gnss_os.path.abspath(__file__)),
-                "gnss_bridge.log")
+                "tools", "gnss_bridge.log")
             _gnss_log = open(_gnss_log_path, "w")
             _gnss_proc = _gnss_subprocess.Popen(
                 ["/usr/bin/python3.10", _gnss_script],

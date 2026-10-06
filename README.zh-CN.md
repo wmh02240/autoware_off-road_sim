@@ -372,6 +372,20 @@ frame_ids_to_remap:
   - "base_link"
 ```
 
+双目相机话题由每辆车的 `camera_topics` 单独配置，路径相对于
+`topic_prefix`。`primary_side` 表示 USD 中已接入 ROS 的主相机对应哪一目：
+
+```yaml
+camera_topics:
+  primary_side: "left"
+  left:
+    image: "left/image_raw"
+    camera_info: "left/camera_info"
+  right:
+    image: "right/image_raw"
+    camera_info: "right/camera_info"
+```
+
 ### 驾驶命令（重映射后）
 
 每辆车提供两个独立的命令话题——每种消息类型各一个。车辆必须处于 **ROS2_CONTROL 模式**（长按 `1` 或 `2` ≥1 秒），才会响应任一话题。
@@ -390,7 +404,10 @@ frame_ids_to_remap:
 | IMU    | `/ego/imu`         | `/opponent/imu`         | `sensor_msgs/Imu`         |
 | 里程计 | `/ego/odom`        | `/opponent/odom`        | `nav_msgs/Odometry`       |
 | LiDAR  | `/ego/point_cloud` | `/opponent/point_cloud` | `sensor_msgs/PointCloud2` |
-| 相机   | `/ego/rgb`         | `/opponent/rgb`         | `sensor_msgs/Image`       |
+| 左目   | `/ego/left/image_raw` | `/opponent/left/image_raw` | `sensor_msgs/Image`    |
+| 右目   | `/ego/right/image_raw` | `/opponent/right/image_raw` | `sensor_msgs/Image`   |
+| 左目参数 | `/ego/left/camera_info` | `/opponent/left/camera_info` | `sensor_msgs/CameraInfo` |
+| 右目参数 | `/ego/right/camera_info` | `/opponent/right/camera_info` | `sensor_msgs/CameraInfo` |
 | GNSS   | `/ego/gnss`        | `/opponent/gnss`        | `sensor_msgs/NavSatFix`   |
 | TF     | `/tf`              | `/tf`                   | `tf2_msgs/TFMessage`      |
 
@@ -750,8 +767,8 @@ RTX 渲染器每帧生成的分辨率。降低该值可以提升 GPU 性能。
 | 脚本                      | 用途                                                                                                                                                                                                                                                 |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scripts/launch_sim.py`   | 主仿真启动器（加载 USD、生成车辆、启动键盘控制、录制分割数据）                                                                                                                                                                                       |
-| `scripts/gnss_bridge.py`  | 通过 rclpy 发布 `sensor_msgs/NavSatFix` 的 Python 3.10 子进程（自动生成）                                                                                                                                                                             |
-| `scripts/drive_bridge.py` | Python 3.10 子进程，订阅每辆车的 `AckermannDriveStamped` 和 `autoware_control_msgs/Control` 驾驶话题，并将命令转发给 Isaac Sim OmniGraph 控制器；还会发布 `/map`、静态 TF 和每辆车的 `control_mode` 状态（`std_msgs/Int32`）（自动生成） |
+| `scripts/tools/gnss_bridge.py`  | 通过 rclpy 发布 `sensor_msgs/NavSatFix` 的 Python 3.10 子进程（自动生成）                                                                                                                                                                             |
+| `scripts/tools/drive_bridge.py` | Python 3.10 子进程，订阅每辆车的 `AckermannDriveStamped` 和 `autoware_control_msgs/Control` 驾驶话题，并将命令转发给 Isaac Sim OmniGraph 控制器；还会发布 `/map`、静态 TF 和每辆车的 `control_mode` 状态（`std_msgs/Int32`）（自动生成） |
 
 ---
 
@@ -766,7 +783,7 @@ RTX 渲染器每帧生成的分辨率。降低该值可以提升 GPU 性能。
 ### 外部 ROS 2 驾驶命令无效
 
 1. **先切换到 ROS2_CONTROL 模式。** 在视口内长按 `1`（主车）或 `2`（对手）≥1 秒。终端状态行必须显示 `[ROS2_CONTROL]`，而不是 `[KEYBOARD_CONTROL]`。
-2. **确认桥接器正在运行。** 启动后，`ros2 node list` 必须包含 `/isaacsim_drive_bridge`。如果缺失，请检查 `scripts/drive_bridge.log` 中的错误。
+2. **确认桥接器正在运行。** 启动后，`ros2 node list` 必须包含 `/isaacsim_drive_bridge`。如果缺失，请检查 `scripts/tools/drive_bridge.log` 中的错误。
 3. **检查启动日志。** 终端应打印类似以下内容：
    ```
    [drive_bridge] Ego_Vehicle: subscribed '/ego/drive' [AckermannDriveStamped]
@@ -792,7 +809,7 @@ RTX 渲染器每帧生成的分辨率。降低该值可以提升 GPU 性能。
 ### GNSS 话题未出现
 
 - 确认配置顶层设置了 `gnss.enabled: true`，并且车辆上设置了 `enable_gnss: true`。
-- 检查启动时终端是否显示 `[GNSS] <vehicle>: NavSatFix publisher on '/ego/gnss'`。如果显示 `[GNSS] Setup error:`，请检查 `scripts/gnss_bridge.log`，查看 Python 3.10 桥接进程的完整错误。
+- 检查启动时终端是否显示 `[GNSS] <vehicle>: NavSatFix publisher on '/ego/gnss'`。如果显示 `[GNSS] Setup error:`，请检查 `scripts/tools/gnss_bridge.log`，查看 Python 3.10 桥接进程的完整错误。
 - 桥接器需要 `/usr/bin/python3.10` 和位于 `/opt/ros/humble` 的 ROS Humble 软件包。Docker 镜像中已包含二者。
 - 验证话题是否活跃：`ros2 topic hz /ego/gnss`（预期约 10 Hz）。
 
