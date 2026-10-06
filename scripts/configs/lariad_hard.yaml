@@ -24,6 +24,13 @@ network_setup:
   network_interface: "auto"
   ros2_cmd_timeout_s: 3.0
 
+tf_settings:
+  namespace_links: true
+  publish_map_to_odom: true
+  map_frame: "map"
+  # The vehicle TF publisher already exposes this camera-body link.  RGB, depth and CameraInfo are forced to the same namespaced frame at launch.
+  camera_frame_leaf: "ZED_XM"
+
 environment:
   asset: "external_assets/lariad_offroad_nav/compat/hard.usda"
   scale: [1.0, 1.0, 1.0]
@@ -61,7 +68,14 @@ vehicles:
     enable_gnss: true
 
 frame_ids_to_remap: ["odom", "base_link"]
-topics_to_remap: ["/drive", "/imu", "/odom", "/point_cloud", "/rgb"]
+topics_to_remap:
+  - "/camera_info"
+  - "/depth"
+  - "/drive"
+  - "/imu"
+  - "/odom"
+  - "/point_cloud"
+  - "/rgb"
 
 keyboard_control_settings:
   max_speed_m_s: 3.0

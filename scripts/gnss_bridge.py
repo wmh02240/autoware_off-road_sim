@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""GNSS publisher bridge for Isaac Sim (Python 3.10 subprocess).
+"""Isaac Sim 的 GNSS 发布桥接程序（Python 3.10 子进程）。
 
-Isaac Sim runs Python 3.12, but rclpy is compiled only for Python 3.10 on
-ROS Humble.  launch_sim.py spawns this script with /usr/bin/python3.10 so
-that GNSS messages can be published via rclpy without a version conflict.
+Isaac Sim 使用 Python 3.12，但 ROS Humble 中的 rclpy 仅为 Python 3.10 编译。
+launch_sim.py 使用 /usr/bin/python3.10 启动本脚本，从而通过 rclpy 发布 GNSS
+消息，同时避免 Python 版本冲突。
 
-Protocol (stdin, one record per line):
+协议（标准输入，每行一条记录）：
   topic<TAB>frame_id<TAB>lat<TAB>lon<TAB>alt<TAB>h_std<TAB>v_std<TAB>stamp_ns
 
-  - lat, lon, alt  : float (degrees / metres)
-  - h_std, v_std   : 1-sigma noise in metres (squared to covariance here)
-  - stamp_ns       : wall-clock nanoseconds since epoch (int)
+  - lat、lon、alt  ：浮点数（度/米）
+  - h_std、v_std   ：以米为单位的 1-sigma 噪声（此处平方后作为协方差）
+  - stamp_ns       ：自纪元起的墙上时钟纳秒数（整数）
 
-Writes "ready\\n" to stdout once the rclpy node is up; the parent reads this
-to avoid sending messages before the bridge is initialised.
+rclpy 节点启动后向标准输出写入 "ready\\n"；父进程读取该信号，
+以免在桥接程序初始化完成前发送消息。
 
-Exits cleanly when stdin is closed (parent process exits).
+标准输入关闭（父进程退出）时正常结束。
 """
 
 import sys
 import os
 import signal
 
-# Ignore SIGINT — the parent (Isaac Sim) owns the shutdown sequence.
+# 忽略 SIGINT——关闭流程由父进程（Isaac Sim）负责。
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 import rclpy
@@ -38,9 +38,9 @@ _qos = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
 )
-_pubs = {}  # topic -> Publisher (created lazily on first message)
+_pubs = {}  # topic -> Publisher（收到第一条消息时再延迟创建）
 
-# Signal readiness to the parent process.
+# 通知父进程当前已就绪。
 sys.stdout.write("ready\n")
 sys.stdout.flush()
 

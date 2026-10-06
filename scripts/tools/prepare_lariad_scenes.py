@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Create non-destructive Isaac Sim 6 compatible layers for LARIAD scenes.
+"""为 LARIAD 场景创建非破坏性的 Isaac Sim 6 兼容图层。
 
-Run this with Isaac Sim's bundled Python.  The generated layers live inside
-the ignored external asset checkout; the upstream binary USD files are never
-modified.
+请使用 Isaac Sim 自带的 Python 运行本脚本。生成的图层位于被忽略的外部资源
+检出目录中；上游二进制 USD 文件绝不会被修改。
 """
 
 from __future__ import annotations
@@ -142,8 +141,8 @@ def _prepare_scene(source: Path, output: Path) -> dict:
         raise RuntimeError(f"Cannot create output layer: {output}")
     output_layer.TransferContent(source_layer)
 
-    # Keep the upstream file immutable while excluding its robot, missing
-    # placeholder payload, and editor-only measurement helper.
+    # 保持上游文件不变，同时排除其中的机器人、缺失的占位 Payload，
+    # 以及仅供编辑器使用的测量辅助对象。
     _remove_spec_if_present(output_layer, "/map/odom")
     _remove_spec_if_present(output_layer, "/map/block")
     _remove_spec_if_present(output_layer, "/Viewport_Measure")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a deterministic validation preview of a generated lawn USD."""
+"""为生成的草坪 USD 渲染具有确定性的验证预览图。"""
 
 from __future__ import annotations
 

@@ -2,26 +2,26 @@
 """
 usd_to_pcd.py
 -------------
-Convert a USD scene to a point cloud by directly sampling triangle faces.
+通过直接采样三角形面，将 USD 场景转换为点云。
 
-Each triangle is sampled proportionally to its area using random barycentric
-coordinates, so dense geometry gets more points and no surface is missed.
-No sensor position, no ray-casting, no occlusion — just surface samples.
+使用随机重心坐标，并按面积比例对每个三角形采样。因此，密集几何体会获得
+更多采样点，同时不会遗漏任何表面。不考虑传感器位置，不进行光线投射，
+也不处理遮挡——仅对表面进行采样。
 
-Dependencies
+依赖项
 ------------
   pip install usd-core numpy
 
-Usage
+用法
 -----
   python usd_to_pcd.py <input.usd[a|z]> [options]
 
-Examples
+示例
 --------
-  python usd_to_pcd.py scene.usda                         # ~500k pts, PLY
-  python usd_to_pcd.py scene.usda -n 1000000 -o map.pcd   # 1M pts, PCD
-  python usd_to_pcd.py scene.usda --normals               # include normals
-  python usd_to_pcd.py scene.usda --density 100           # 100 pts per unit²
+  python usd_to_pcd.py scene.usda                         # 约 50 万个点，PLY
+  python usd_to_pcd.py scene.usda -n 1000000 -o map.pcd   # 100 万个点，PCD
+  python usd_to_pcd.py scene.usda --normals               # 包含法向量
+  python usd_to_pcd.py scene.usda --density 100           # 每平方单位 100 个点
 """
 
 import argparse
@@ -34,21 +34,21 @@ from pxr import Usd, UsdGeom
 
 
 # ---------------------------------------------------------------------------
-# USD extraction
+# USD 数据提取
 # ---------------------------------------------------------------------------
 
 def _world_matrix(prim) -> np.ndarray:
     """
-    USD uses ROW-MAJOR transforms: world_pt = [x,y,z,1] @ M
-    Translation is in the last ROW (M[3, :3]), NOT the last column.
-    So the correct application is:  pts_world = pts_h @ M   (NOT @ M.T)
+    USD 使用行主序变换：world_pt = [x,y,z,1] @ M。
+    平移量位于最后一行（M[3, :3]），而不是最后一列。
+    因此正确的应用方式为：pts_world = pts_h @ M（不是 @ M.T）。
     """
     xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
     return np.array(xform).reshape(4, 4)
 
 
 def extract_triangles(usd_path: str):
-    """Return world-space triangles and face normals."""
+    """返回世界坐标系下的三角形和面法向量。"""
     stage = Usd.Stage.Open(usd_path)
     if not stage:
         raise RuntimeError(f"Cannot open: {usd_path}")
@@ -71,12 +71,12 @@ def extract_triangles(usd_path: str):
         if pts is None or len(pts) == 0:
             continue
 
-        # Apply world transform — USD row-major: pts_world = [x,y,z,1] @ M
+        # 应用世界变换——USD 为行主序：pts_world = [x,y,z,1] @ M
         M    = _world_matrix(prim)
         ones = np.ones((len(pts), 1), dtype=np.float32)
         pts  = (np.hstack([pts, ones]) @ M)[:, :3]
 
-        # Triangulate faces (fan triangulation)
+        # 对面进行三角剖分（扇形三角剖分）
         i = 0
         for count in counts:
             face = indices[i:i + count]
@@ -93,7 +93,7 @@ def extract_triangles(usd_path: str):
     v1 = np.array(all_v1, dtype=np.float32)
     v2 = np.array(all_v2, dtype=np.float32)
 
-    # Face normals and areas
+    # 面法向量和面积
     e1      = v1 - v0
     e2      = v2 - v0
     crosses = np.cross(e1, e2)
@@ -105,7 +105,7 @@ def extract_triangles(usd_path: str):
 
 
 # ---------------------------------------------------------------------------
-# Face sampling
+# 面采样
 # ---------------------------------------------------------------------------
 
 def sample_points(v0, v1, v2, normals, areas,
@@ -122,7 +122,7 @@ def sample_points(v0, v1, v2, normals, areas,
     probs   = areas / total_area
     tri_idx = rng.choice(len(v0), size=n_points, p=probs)
 
-    # Uniform barycentric sampling (Osada et al.)
+    # 均匀重心坐标采样（Osada 等人的方法）
     r1      = rng.random(n_points).astype(np.float32)
     r2      = rng.random(n_points).astype(np.float32)
     sqrt_r1 = np.sqrt(r1)
@@ -138,7 +138,7 @@ def sample_points(v0, v1, v2, normals, areas,
 
 
 # ---------------------------------------------------------------------------
-# Writers
+# 文件写入函数
 # ---------------------------------------------------------------------------
 
 def write_ply(path, points, normals=None):
@@ -176,7 +176,7 @@ def write_pcd(path, points, normals=None):
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# 命令行界面
 # ---------------------------------------------------------------------------
 
 def main():

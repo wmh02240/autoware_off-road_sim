@@ -24,8 +24,8 @@ def main():
         default=False,
         help="Run without a display window. All vehicles default to ROS2_CONTROL mode.",
     )
-    # Preserve Kit/Carbonite arguments (for example Tracy profiler switches)
-    # for SimulationApp while still parsing this launcher's own options.
+    # 在解析本启动器自身选项的同时，为 SimulationApp 保留 Kit/Carbonite 参数
+    #（例如 Tracy 分析器开关）。
     args, _kit_extra_args = parser.parse_known_args()
     headless_mode = args.headless
 
@@ -35,13 +35,13 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    # Resolve paths relative to the repository root
+    # 以仓库根目录为基准解析路径
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     
     env_asset_path = os.path.join(repo_root, config.get("environment_asset", ""))
     print(f"Environment asset: {env_asset_path}")
 
-    # Parse network configuration
+    # 解析网络配置
     network_setup = config.get("network_setup", {})
     ros2_domain_id = network_setup.get("ros2_domain_id", 0)
     network_interface = network_setup.get("network_interface", "auto")
@@ -50,30 +50,30 @@ def main():
     ui_cfg = config.get("user_interface", {})
     _ui_viewport_mode = not headless_mode and bool(ui_cfg.get("viewport_mode", False))
     _ui_split_screen  = not headless_mode and bool(ui_cfg.get("split_screen", False))
-    # Default control mode for vehicles at startup (non-headless). "KEYBOARD" →
-    # KEYBOARD_CONTROL, "ROS2_CONTROL" → ROS2_CONTROL. Headless always overrides
-    # to ROS2_CONTROL below since no keyboard is available.
+    # 车辆启动时的默认控制模式（非无头模式）。"KEYBOARD" → KEYBOARD_CONTROL，
+    # "ROS2_CONTROL" → ROS2_CONTROL。无头模式下由于没有键盘，
+    # 下方逻辑始终会覆盖为 ROS2_CONTROL。
     _ui_default_ctrl_mode = str(ui_cfg.get("default_control_mode", "KEYBOARD")).strip().upper()
 
-    # ── CycloneDDS setup ──────────────────────────────────────────────────
-    # Belt-and-suspenders: set RMW explicitly in case Isaac Sim's Python doesn't
-    # inherit the Docker ENV (it launches with its own bundled interpreter).
+    # ── CycloneDDS 设置 ────────────────────────────────────────────────────
+    # 为稳妥起见显式设置 RMW，以防 Isaac Sim 自带解释器启动的 Python
+    # 没有继承 Docker 环境变量。
     os.environ["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
     os.environ["ROS_DOMAIN_ID"] = str(ros2_domain_id)
 
     if network_interface != "auto":
-        # Resolve explicit IP or interface name → IP address
+        # 将显式 IP 或网卡名称解析为 IP 地址
         def _resolve_ip(iface):
-            if "." in iface:          # already an IP string
+            if "." in iface:          # 已经是 IP 字符串
                 return iface
-            try:                      # interface name → IP via fcntl SIOCGIFADDR
+            try:                      # 通过 fcntl SIOCGIFADDR 将网卡名称转换为 IP
                 import socket, fcntl, struct
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 packed = fcntl.ioctl(s.fileno(), 0x8915,
                                      struct.pack("256s", iface[:15].encode()))
                 return socket.inet_ntoa(packed[20:24])
             except Exception:
-                return iface          # fall back to the string as-is
+                return iface          # 后备方案：原样使用该字符串
 
         lan_ip = _resolve_ip(network_interface)
         _cyclone_xml = (
@@ -93,20 +93,20 @@ def main():
 
     print(f"[ROS2] RMW_IMPLEMENTATION=rmw_cyclonedds_cpp  ROS_DOMAIN_ID={ros2_domain_id}")
 
-    # Initialize the simulation app
+    # 初始化仿真应用
     viewport_opts = config.get("graphics_settings", {})
     render_res = viewport_opts.get("render_resolution", [2560, 1440])
 
-    # This must happen before other omni imports.
-    # Load the full Isaac Sim experience (same kit config as isaac-sim.sh) so all
-    # panels, editors, and extensions are present — not the minimal Python standalone UI.
-    # CARB_APP_PATH points to .../release/kit; the experience kit files live in the
-    # sibling .../release/apps/ directory, so step up one level.
+    # 此操作必须在导入其他 omni 模块之前完成。
+    # 加载完整的 Isaac Sim Experience（与 isaac-sim.sh 使用相同 Kit 配置），
+    # 以提供全部面板、编辑器和扩展，而不是最精简的 Python 独立界面。
+    # CARB_APP_PATH 指向 .../release/kit；Experience 的 Kit 文件位于同级的
+    # .../release/apps/ 目录，因此需要向上返回一级。
     _carb_app_path = os.environ.get("CARB_APP_PATH", "")
-    _release_dir = os.path.dirname(_carb_app_path)  # .../release
+    _release_dir = os.path.dirname(_carb_app_path)  # 对应路径：.../release
     _exp_full = os.path.join(_release_dir, "apps", "isaacsim.exp.full.kit")
     if not os.path.exists(_exp_full):
-        # Fallback: search apps/ for any isaacsim full kit file
+        # 后备方案：在 apps/ 中查找任意 Isaac Sim 完整版 Kit 文件
         _apps_dir = os.path.join(_release_dir, "apps")
         _candidates = [f for f in os.listdir(_apps_dir) if "full" in f and f.endswith(".kit")] if os.path.isdir(_apps_dir) else []
         if _candidates:
@@ -117,9 +117,8 @@ def main():
             _exp_full = ""
     _sim_cfg = {"headless": headless_mode, "experience": _exp_full}
 
-    # Tracy must be configured before SimulationApp starts.  The YAML switch
-    # keeps normal runs free of profiler overhead, while parse_known_args above
-    # still permits manual Kit profiler flags on the command line.
+    # Tracy 必须在 SimulationApp 启动前配置。YAML 开关可避免常规运行承担
+    # 分析器开销，而上面的 parse_known_args 仍允许从命令行手动传入 Kit 分析参数。
     _profiling_cfg = config.get("profiling", {})
     _tracy_cfg = _profiling_cfg.get("tracy", {})
     _tracy_enabled = bool(_tracy_cfg.get("enabled", False))
@@ -145,24 +144,24 @@ def main():
     if not headless_mode:
         _sim_cfg["width"]           = render_res[0]
         _sim_cfg["height"]          = render_res[1]
-        _sim_cfg["display_options"] = 3287  # 3286 (default) | 1 (DISP_FPS)
+        _sim_cfg["display_options"] = 3287  # 3286（默认值）| 1（显示 FPS）
     simulation_app = SimulationApp(_sim_cfg)
     
-    # Force output renderer resolution specifically (useful if decoupled from window size)
+    # 单独强制设置输出渲染器分辨率（与窗口大小解耦时很有用）
     import carb
     carb_settings = carb.settings.get_settings()
 
     if not headless_mode:
         carb_settings.set_int("/app/renderer/resolution/width", render_res[0])
         carb_settings.set_int("/app/renderer/resolution/height", render_res[1])
-        # Toggle viewport FPS display
+        # 切换视口 FPS 显示
         carb_settings.set_bool("/app/window/showFps", True)
         carb_settings.set_bool("/app/viewport/showFps", True)
         carb_settings.set_bool("/exts/omni.kit.viewport.window/fps", True)
-        # DLSS Super Resolution + Frame Generation (FPS Multiplier x2)
-        # /rtx/post/aa/op: 0=None,1=TAA,2=FXAA,3=DLSS,4=DLAA
-        # /rtx/post/dlss/execMode: 0=Performance(~2x), 1=Balanced, 2=Quality, 3=UltraPerf
-        # /rtx-transient/dlssg/enabled: DLSS-G frame generation = FPS Multiplier in the UI
+        # DLSS 超分辨率 + 帧生成（FPS 倍增器 x2）
+        # /rtx/post/aa/op：0=无，1=TAA，2=FXAA，3=DLSS，4=DLAA
+        # /rtx/post/dlss/execMode：0=性能（约 2x），1=平衡，2=质量，3=超高性能
+        # /rtx-transient/dlssg/enabled：DLSS-G 帧生成，即界面中的 FPS 倍增器
         if viewport_opts.get("enable_DLSS_FPS_Multiplier_x2", False):
             carb_settings.set_int("/rtx/post/aa/op", 3)
             carb_settings.set_int("/rtx/post/dlss/execMode", 0)
@@ -179,8 +178,8 @@ def main():
             print("[Renderer] Reflections disabled.")
         print(f"Configured Viewport Render Resolution to {render_res[0]}x{render_res[1]} with FPS counter")
 
-        # Viewport mode: hide all panels except the viewport at startup so they
-        # never appear to the user (not just closed after the fact).
+        # 视口模式：启动时隐藏视口以外的所有面板，使它们从一开始就不向用户显示，
+        # 而不是显示后再关闭。
         if _ui_viewport_mode:
             try:
                 import omni.ui as _ui_startup
@@ -198,15 +197,15 @@ def main():
             except Exception as _vms_err:
                 print(f"[UI] Viewport mode startup error: {_vms_err}")
 
-    # Prevent Isaac Sim Full from auto-adding a defaultLight to the stage.
-    # The environment USD already contains a DomeLight; a second light would alter the scene.
+    # 阻止 Isaac Sim Full 自动向 Stage 添加 defaultLight。
+    # 环境 USD 已包含 DomeLight，第二盏灯会改变场景效果。
     carb_settings.set_bool("/app/stage/generateDefaultLight", False)
 
     import omni.usd
     from pxr import UsdGeom, Gf, Sdf
     import omni.ext
 
-    # Ensure a stage is open
+    # 确保已有 Stage 打开
     context = omni.usd.get_context()
     if not context.get_stage():
         context.new_stage()
@@ -225,7 +224,7 @@ def main():
         except Exception:
             pass
             
-    # Load environment
+    # 加载环境
     env_config = config.get("environment", {})
     if isinstance(env_config, str):
         env_asset_path = env_config
@@ -244,7 +243,7 @@ def main():
         strip_embed_physics_scenes(env_asset_path)
         env_prim = stage.DefinePrim("/World/Environment", "Xform")
         
-        # Apply transformations using UsdGeom Xformable APIs securely
+        # 使用 UsdGeom Xformable API 安全地应用变换
         xformable = UsdGeom.Xformable(env_prim)
         xformable.AddScaleOp().Set(Gf.Vec3d(*env_scale))
         xformable.AddRotateXYZOp().Set(Gf.Vec3d(*env_rot))
@@ -255,7 +254,7 @@ def main():
     else:
         print(f"Warning: Environment asset not found at {env_asset_path}")
 
-    # Load vehicles
+    # 加载车辆
     vehicles = config.get("vehicles", [])
     for veh in vehicles:
         if not veh.get("enabled", True):
@@ -276,7 +275,7 @@ def main():
             strip_embed_physics_scenes(veh_asset_path)
             veh_prim = stage.DefinePrim(prim_path, "Xform")
             
-            # Apply transformations
+            # 应用变换
             xformable = UsdGeom.Xformable(veh_prim)
             xformable.AddScaleOp().Set(Gf.Vec3d(*veh_scale))
             xformable.AddRotateXYZOp().Set(Gf.Vec3d(*veh_rot))
@@ -287,13 +286,12 @@ def main():
         else:
             print(f"Warning: Vehicle asset not found at {veh_asset_path}")
 
-    # ── Vehicle USD compatibility repair: IMU fixed joint ──────────────────
-    # roboracer_max.usd contains a stale body target named ``Sensors/IMU``.
-    # The actual rigid-body prim in the asset is ``Imu_Sensor`` below the
-    # chassis base_link.  An unresolved body relationship makes PhysX discard
-    # the complete fixed joint.  Author a composed-stage override instead of
-    # changing the binary USD crate, and only replace that exact stale target.
-    # This keeps the repair safe for other vehicle assets/configurations.
+    # ── 车辆 USD 兼容性修复：IMU 固定关节 ───────────────────────────────────
+    # roboracer_max.usd 包含名为 ``Sensors/IMU`` 的过期刚体目标。
+    # 资源中实际的刚体 Prim 是底盘 base_link 下的 ``Imu_Sensor``。
+    # 无法解析的刚体关系会使 PhysX 丢弃整个固定关节。这里不修改二进制 USD Crate，
+    # 而是在组合 Stage 中写入覆盖，并且只替换这一确切的过期目标，
+    # 从而保证该修复对其他车辆资源和配置是安全的。
     for _imu_joint in stage.Traverse():
         _imu_joint_path = _imu_joint.GetPath().pathString
         if not _imu_joint_path.endswith("/Joints/IMUFixedJoint"):
@@ -312,8 +310,7 @@ def main():
             _new_targets = []
             _changed = False
             for _target in _targets:
-                # Do not rewrite arbitrary missing targets: this repair is
-                # deliberately scoped to the known obsolete IMU location.
+                # 不要改写任意缺失目标：此修复刻意只作用于已知的旧 IMU 位置。
                 if str(_target).endswith("/Sensors/IMU"):
                     _new_targets.append(_imu_target)
                     _changed = True
@@ -327,10 +324,9 @@ def main():
             print(f"[Physics] Repaired IMUFixedJoint at {_imu_joint_path}: "
                   f"{', '.join(_repaired_rels)} -> {_imu_target}")
 
-    # The source vehicle USD has one suspension joint whose two authored local
-    # frames resolve to different world-space frames.  PhysX consequently snaps
-    # the connected parts together when play begins.  Preserve body0's authored
-    # anchor and derive body1's local frame from it, before PhysX consumes USD.
+    # 源车辆 USD 中有一个悬架关节，其写入的两个局部坐标系会解析到不同的世界坐标系。
+    # 因此开始播放时，PhysX 会将连接部件突然吸合。在 PhysX 读取 USD 前，
+    # 保留 body0 已写入的锚点，并由此推导 body1 的局部坐标系。
     for _susp_joint in stage.Traverse():
         _susp_path = _susp_joint.GetPath().pathString
         if not _susp_path.endswith("/Joints/Chassis__Arm_Rear_Upper_Right"):
@@ -360,7 +356,7 @@ def main():
                 _im = _q.GetImaginary()
                 return Gf.Quatd(float(_q.GetReal()), Gf.Vec3d(float(_im[0]), float(_im[1]), float(_im[2])))
 
-            # USD uses row-vector transforms: local_frame * body_world.
+            # USD 使用行向量变换：local_frame * body_world。
             _local0 = Gf.Matrix4d(1.0)
             _local0.SetRotate(Gf.Rotation(_quatd(_rot0)))
             _local0.SetTranslateOnly(Gf.Vec3d(float(_pos0[0]), float(_pos0[1]), float(_pos0[2])))
@@ -387,12 +383,10 @@ def main():
         except Exception as _susp_repair_err:
             print(f"[Physics] Suspension joint repair failed at {_susp_path}: {_susp_repair_err}")
 
-    # Imu_Sensor is a rigid body attached by the fixed joint above, but the
-    # source USD uses a negative mass sentinel without colliders from which
-    # PhysX can derive mass properties.  Give this small (30 mm, 10 g) IMU an
-    # explicit physically valid mass and cuboid inertia instead of accepting
-    # PhysX's unstable small-sphere fallback.  Do not touch the LiDAR here;
-    # that is a separate asset issue and is fixed independently.
+    # Imu_Sensor 是由上述固定关节连接的刚体，但源 USD 使用负质量哨兵值，
+    # 且没有可供 PhysX 推导质量属性的碰撞体。为这个小型 IMU（30 mm、10 g）
+    # 显式设置物理有效的质量和长方体惯量，避免采用 PhysX 不稳定的小球后备值。
+    # 此处不要修改 LiDAR；那是另一个资源问题，将单独修复。
     for _imu_sensor in stage.Traverse():
         _imu_sensor_path = _imu_sensor.GetPath().pathString
         if not _imu_sensor_path.endswith("/Rigid_Bodies/Chassis/base_link/Imu_Sensor"):
@@ -400,8 +394,8 @@ def main():
         try:
             from pxr import UsdPhysics
             _imu_mass_api = UsdPhysics.MassAPI.Apply(_imu_sensor)
-            _imu_mass_api.CreateMassAttr(0.01)  # kg
-            # I = m * side^2 / 6 for a 30 mm cube with m = 10 g.
+            _imu_mass_api.CreateMassAttr(0.01)  # 单位：kg
+            # 对边长 30 mm、质量 10 g 的立方体，I = m * side^2 / 6。
             _imu_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(1.5e-6, 1.5e-6, 1.5e-6))
             _imu_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
             print(f"[Physics] Repaired IMU mass properties at {_imu_sensor_path}: "
@@ -409,10 +403,9 @@ def main():
         except Exception as _imu_mass_err:
             print(f"[Physics] IMU mass-property repair failed at {_imu_sensor_path}: {_imu_mass_err}")
 
-    # The OS2 RTX LiDAR is likewise authored as a rigid body with a negative
-    # mass sentinel and no colliders.  Approximate it as a 0.40 kg cylinder
-    # (90 mm diameter, 80 mm high) so it has stable explicit properties.  This
-    # is intentionally independent of the IMU repair above.
+    # OS2 RTX LiDAR 同样被写成使用负质量哨兵值且没有碰撞体的刚体。
+    # 将其近似为 0.40 kg 的圆柱体（直径 90 mm、高 80 mm），以获得稳定的显式属性。
+    # 此操作有意与上面的 IMU 修复相互独立。
     for _lidar_sensor in stage.Traverse():
         _lidar_sensor_path = _lidar_sensor.GetPath().pathString
         if not _lidar_sensor_path.endswith("/Sensors/OS2/sensor"):
@@ -420,8 +413,8 @@ def main():
         try:
             from pxr import UsdPhysics
             _lidar_mass_api = UsdPhysics.MassAPI.Apply(_lidar_sensor)
-            _lidar_mass_api.CreateMassAttr(0.40)  # kg
-            # Solid-cylinder inertia: Ixx=Iyy≈4.16e-4, Izz≈4.05e-4 kg·m².
+            _lidar_mass_api.CreateMassAttr(0.40)  # 单位：kg
+            # 实心圆柱体惯量：Ixx=Iyy≈4.16e-4，Izz≈4.05e-4 kg·m²。
             _lidar_mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(4.16e-4, 4.16e-4, 4.05e-4))
             _lidar_mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
             print(f"[Physics] Repaired OS2 LiDAR mass properties at {_lidar_sensor_path}: "
@@ -429,13 +422,13 @@ def main():
         except Exception as _lidar_mass_err:
             print(f"[Physics] OS2 LiDAR mass-property repair failed at {_lidar_sensor_path}: {_lidar_mass_err}")
 
-    # Apply PhysicsScene overrides from configuration
+    # 应用配置中的 PhysicsScene 覆盖
     physics_opts = config.get("physics_settings", {})
     if physics_opts:
         from pxr import UsdPhysics, Sdf
-        solver_type = "PGS"  # TGS is unstable with wheeled vehicles
+        solver_type = "PGS"  # TGS 对轮式车辆不稳定
         time_steps = float(physics_opts.get("time_steps_per_second", 120.0))
-        enable_gpu  = False  # GPU dynamics disabled (incompatible with current USD setup)
+        enable_gpu  = False  # 禁用 GPU 动力学（与当前 USD 设置不兼容）
         bp_type     = "SAP"
         pos_iters   = int(physics_opts.get("solver_position_iterations", 16))
         vel_iters   = int(physics_opts.get("solver_velocity_iterations", 4))
@@ -460,9 +453,9 @@ def main():
                 else: prim.CreateAttribute("physxScene:broadphaseType", Sdf.ValueTypeNames.Token).Set(bp_type)
 
                 if scenes_updated:
-                    # A duplicate PhysicsScene was found embedded in a vehicle or environment reference!
-                    # This completely breaks the PhysX timeline synchronization and throws overlapping read warnings.
-                    # We must natively ERADICATE any extra scenes from the composed USD stage entirely.
+                    # 在车辆或环境引用中发现了嵌入的重复 PhysicsScene！
+                    # 这会彻底破坏 PhysX 时间线同步，并产生重叠读取警告。
+                    # 必须从组合后的 USD Stage 中原生、彻底地清除所有多余场景。
                     print(f"[Physics] Warning: Eradicating duplicate PhysicsScene from composed stage at '{prim.GetPath()}'")
                     stage.RemovePrim(prim.GetPath())
                     continue
@@ -480,7 +473,7 @@ def main():
             prim.CreateAttribute("physxScene:broadphaseType", Sdf.ValueTypeNames.Token).Set(bp_type)
             print(f"[Physics] Force-configured Singleton PhysicsScene at '/physicsScene' -> Solver: {solver_type}, Steps: {time_steps}, GPU: {enable_gpu}, BP: {bp_type}")
 
-        # Apply per-articulation solver iteration counts to all articulation roots
+        # 将每个 Articulation 的求解器迭代次数应用到所有 Articulation 根节点
         try:
             from pxr import PhysxSchema
             for prim in stage.Traverse():
@@ -496,7 +489,7 @@ def main():
         except Exception as _e:
             print(f"[Physics] Warning: Could not set articulation iterations: {_e}")
 
-    # Apply friction overrides from config
+    # 应用配置中的摩擦力覆盖
     friction_cfgs = config.get("environment", {}).get("frictions", [])
     if friction_cfgs:
         try:
@@ -524,11 +517,11 @@ def main():
         except Exception as _fe:
             print(f"[Friction] Warning: Could not apply friction overrides: {_fe}")
 
-    # Enable ROS2 and Core nodes with defensive discovery to avoid version conflicts
+    # 通过防御式发现启用 ROS 2 和 Core 节点，以避免版本冲突
     import omni.kit.app
     ext_manager = omni.kit.app.get_app().get_extension_manager()
     
-    # Pre-scan available extensions
+    # 预扫描可用扩展
     available_exts = [e.get("id") for e in ext_manager.get_extensions()]
     def enable_preferred(variants):
         found = False
@@ -537,18 +530,18 @@ def main():
                 if ext_manager.set_extension_enabled_immediate(v, True):
                     print(f"[Extensions] Enabled compatible variant: {v}")
                     found = True
-                    # In some versions like 6.0+, we might need all available variants
-                    # for different node types. We continue in those cases.
+                    # 在 6.0+ 等部分版本中，不同节点类型可能需要所有可用变体，
+                    # 遇到这种情况时继续处理。
         return found
 
-    # Enable everything we can for the bridge and core nodes.
+    # 为桥接和 Core 节点启用所有可用扩展。
     enable_preferred(["isaacsim.ros2.bridge", "omni.isaac.ros2_bridge", "isaacsim.ros2.nodes", "isaacsim.core_nodes", "omni.isaac.core_nodes"])
     
     import omni.usd
     stage = omni.usd.get_context().get_stage()
     
-    # ── Sensor Topic Remapping ──────────────────────────────────────────────────
-    # Remap all hardcoded sensor topics baked into the USD to per-vehicle namespaced topics.
+    # ── 传感器话题重映射 ───────────────────────────────────────────────────────
+    # 将 USD 中固化的所有传感器话题重映射为带车辆命名空间的话题。
     sensor_topics  = config.get("topics_to_remap", [])
     frame_ids      = config.get("frame_ids_to_remap", [])
     _frame_ids_set = set(frame_ids)
@@ -560,7 +553,7 @@ def main():
         veh_name = veh.get("name", "Vehicle")
         veh_prim_path = f"/World/{veh_name}"
         topic_prefix = veh.get("topic_prefix", f"/{veh_name.lower()}")
-        topic_prefix = "/" + topic_prefix.strip("/") # Ensure /ego format
+        topic_prefix = "/" + topic_prefix.strip("/") # 确保采用 /ego 格式
         ackermann_topic = topic_prefix + "/drive"
         
         remapped_count = 0
@@ -568,13 +561,13 @@ def main():
         if not veh_prim.IsValid():
             continue
             
-        # Traverse only under this vehicle's prim hierarchy
+        # 仅遍历该车辆的 Prim 层级
         for prim in stage.Traverse():
             p_path = prim.GetPath().pathString
             if not p_path.startswith(veh_prim_path):
                 continue
             
-            # Check for ROS2 Subscription nodes specifically for drive control
+            # 专门检查用于驾驶控制的 ROS 2 订阅节点
             if prim.GetTypeName() == "OmniGraphNode":
                 try:
                     node_type = prim.GetAttribute("node:type").Get()
@@ -585,11 +578,11 @@ def main():
                             print(f"[ROS2 setup] {veh_name}: Drive topic -> '{ackermann_topic}'")
                 except Exception: pass
 
-            # ── Sensor Topic Remapping (Exhaustive Scan) ───────────────────────
-            # Remap ALL string attributes that match known sensor topics (imu, rgb, tf, etc.)
+            # ── 传感器话题重映射（穷举扫描）────────────────────────────────────
+            # 重映射与已知传感器话题（imu、rgb、tf 等）匹配的所有字符串属性
             for attr in prim.GetAttributes():
                 attr_name = attr.GetName().lower()
-                # Skip attributes that designate data types or configuration constants
+                # 跳过用于指定数据类型或配置常量的属性
                 if "type" in attr_name or "format" in attr_name:
                     continue
                     
@@ -607,8 +600,8 @@ def main():
                         remapped_count += 1
                         print(f"[ROS2 remap] {veh_name}: frame_id '{attr.GetName()}' | '{val}' -> '{new_val}'")
             
-            # Remap ConstantString node_namespace (used by ROS2 nodes as the /tf namespace)
-            # These nodes typically have an output 'value' used as a namespace string.
+            # 重映射 ConstantString 的 node_namespace（ROS 2 节点将其用作 /tf 命名空间）
+            # 这些节点通常具有一个作为命名空间字符串使用的输出 ``value``。
             ns_attr = prim.GetAttribute("inputs:value")
             if ns_attr:
                 ns_val = ns_attr.Get()
@@ -618,14 +611,14 @@ def main():
                     remapped_count += 1
                     print(f"[ROS2 remap] {veh_name}: namespace '{ns_val}' -> '{new_ns}'")
 
-            # ── Drone Camera / Follow Path Patching ───────────────────────
-            # If the USD contains absolute paths to target prims for follow
-            # behaviors, these break after namespacing. Prepend the prefix.
+            # ── 无人机相机/跟随路径修补 ─────────────────────────────────────
+            # 如果 USD 中的跟随行为使用目标 Prim 的绝对路径，加入命名空间后路径会失效，
+            # 因此在路径前添加前缀。
             for attr_name in ("inputs:target_prim", "inputs:targetPrim", "inputs:target"):
                 target_attr = prim.GetAttribute(attr_name)
                 if target_attr:
                     target_val = target_attr.Get()
-                    # OmniGraph target attributes are often strings or Sdf.Path
+                    # OmniGraph 目标属性通常是字符串或 Sdf.Path
                     if target_val and str(target_val).startswith("/") and not str(target_val).startswith(veh_prim_path):
                         new_target = f"{veh_prim_path}{str(target_val)}"
                         target_attr.Set(new_target if isinstance(target_val, str) else Sdf.Path(new_target))
@@ -634,17 +627,17 @@ def main():
         
         print(f"[ROS2 remap] {veh_name}: {remapped_count} sensor topic(s) remapped with prefix '{topic_prefix}'")
 
-        # ── Follow Camera Creation is now deferred to the 'BaseLink' discovery phase below ──
+        # ── 跟随相机的创建现已推迟到下方的 ``BaseLink`` 发现阶段 ──
 
 
-    # Force synchronous physics execution to prevent the ROS2 omnigraph from making overlap reads 
-    # to rigorous physics variables (like getLinearVelocity) while PhysX is simulating asynchronously.
+    # 强制同步执行物理计算，防止 PhysX 异步仿真时 ROS 2 OmniGraph 对严格物理变量
+    #（如 getLinearVelocity）进行重叠读取。
     
-    # Let the extensions and graph initialize properly before acquiring the core context
+    # 获取 Core 上下文前，让扩展和图完成初始化
     simulation_app.update()
 
-    # Isaac Sim Full auto-adds /Environment/defaultLight on startup. Remove it so only
-    # the DomeLight baked into the environment USD is active.
+    # Isaac Sim Full 启动时会自动添加 /Environment/defaultLight。
+    # 将其移除，以确保仅启用环境 USD 中固化的 DomeLight。
     _stage_now = omni.usd.get_context().get_stage()
     for _dl_path in ("/Environment/defaultLight", "/World/Environment/defaultLight"):
         _dl_prim = _stage_now.GetPrimAtPath(_dl_path)
@@ -652,57 +645,56 @@ def main():
             _stage_now.RemovePrim(_dl_path)
             print(f"[Stage] Removed auto-added defaultLight at {_dl_path}")
     
-    # Unconditionally force PhysX into synchronous mode via the underlying C++ carb configuration. 
-    # This fundamentally prevents ROS 2 ActionGraph nodes from suffering race collisions evaluating velocity.
+    # 通过底层 C++ Carb 配置无条件强制 PhysX 使用同步模式，
+    # 从根本上避免 ROS 2 ActionGraph 节点计算速度时发生竞态冲突。
     import carb
     carb_settings = carb.settings.get_settings()
     carb_settings.set_bool("/physics/asyncFastSimulation", False)
     carb_settings.set_bool("/physics/updateToUsd", True)
     
-    # Enforce strict step-limit alignment to perfectly sync physics ticks with rendering ticks
+    # 强制严格对齐步数限制，使物理 Tick 与渲染 Tick 完全同步
     app_freq = int(float(config.get("physics_settings", {}).get("time_steps_per_second", 60.0)))
     carb_settings.set_int("/persistent/simulation/minFrameRate", app_freq)
     carb_settings.set_bool("/app/runLoops/main/rateLimitEnabled", True)
     carb_settings.set_int("/app/runLoops/main/rateLimitFrequency", app_freq)
 
-    # Suppress the [PoseTree] "parent getObjectType eInvalid" warning flood from
-    # the ROS2 TF publisher.  carb logging is synchronous on the main loop, so a
-    # failing TF node logging at tick rate (×N target frames) injects variable
-    # per-step latency and destabilizes the real-time factor.  Drop this channel
-    # to Error so warnings don't steal step budget.  NOTE: this only hides the
-    # spam — the underlying TF tree failure is reported by the PoseTree diag pass
-    # below and must be fixed for the map->odom->base_link chain to be complete.
+    # 抑制 ROS 2 TF 发布器产生的大量 [PoseTree] ``parent getObjectType eInvalid`` 警告。
+    # Carb 日志在主循环上同步执行，因此失败的 TF 节点按 Tick 频率（×N 个目标坐标系）
+    # 写日志会引入变化的逐步延迟，使实时因子不稳定。将该通道降为 Error，避免警告
+    # 占用步进预算。注意：这只隐藏刷屏信息；底层 TF 树故障仍由下方 PoseTree 诊断流程
+    # 报告，并且必须修复才能形成完整的 map->odom->base_link 链。
     carb_settings.set("/log/channels/isaacsim.ros2.nodes", "Error")
 
-    # Standard timeline execution loop since omni.isaac.core is deprecated in this build module
+    # 此构建中 omni.isaac.core 已弃用，因此使用标准时间线执行循环
     import omni.timeline
     import omni.physx
     
-    # Force the physx engine to flush any pending async changes before initiating play
+    # 开始播放前强制 PhysX 引擎刷新所有待处理的异步更改
     omni.physx.get_physx_interface().force_load_physics_from_usd()
     
     timeline = omni.timeline.get_timeline_interface()
     timeline.play()
     
-    # Establish Native UI Hardware Teleop Binding utilizing raw Carbon input layers dynamically mapped via ActionGraph (No C-Extension Py3.10 conflicts!)
+    # 使用经 ActionGraph 动态映射的原始 Carbon 输入层建立原生 UI 硬件遥控绑定
+    #（不会产生 C 扩展与 Python 3.10 的冲突！）
     import carb.input
     import omni.appwindow
     import omni.graph.core as og
     import omni.timeline
     
-    vehicle_teleop_publishers = {}  # Store per-vehicle (ctrl_node, pub_node) metadata
+    vehicle_teleop_publishers = {}  # 保存每辆车的 (ctrl_node, pub_node) 元数据
     
-    # Identify the appropriate ROS2 publisher node type from the system
-    # Modern Isaac Sim uses isaacsim.ros2.bridge, Legacy/Omni versions use omni.isaac.ros2_bridge
+    # 从系统中识别合适的 ROS 2 发布器节点类型
+    # 新版 Isaac Sim 使用 isaacsim.ros2.bridge，旧版/Omni 版本使用 omni.isaac.ros2_bridge
     pub_node_type = "isaacsim.ros2.bridge.ROS2PublishAckermannDrive"
     if og.get_node_type(pub_node_type) is None:
         pub_node_type = "omni.isaac.ros2_bridge.ROS2PublishAckermannDrive"
     
     print(f"[Teleop] Using ROS2 Publisher Node Type: {pub_node_type}")
 
-    # Intercept the ActionGraph for EACH vehicle to inject viewport loopback
-    # Strategy: Discover the existing AckermannController node and drive it directly PLUS
-    #            inject a ROS2 publisher wired to the existing ros2_context for observability.
+    # 拦截每辆车的 ActionGraph，注入视口环回
+    # 策略：找到现有 AckermannController 节点并直接驱动它，同时注入连接到现有
+    # ros2_context 的 ROS 2 发布器，以便观察状态。
     for i, veh in enumerate(vehicles):
         veh_name = veh.get("name", f"Vehicle_{i}")
         _veh_prefix = "/" + veh.get("topic_prefix", f"/vehicle_{i}").strip("/")
@@ -716,15 +708,15 @@ def main():
         ros2_context_path = ""
         subscribe_node_path = ""
 
-        # 1. Discovery pass: find AckermannController, ros2_context, and subscriber nodes.
-        #    Uses OG runtime first; falls back to USD prim attribute so both vehicles are
-        #    found even if the second vehicle's graph isn't fully registered at startup.
+        # 1. 发现阶段：查找 AckermannController、ros2_context 和订阅器节点。
+        #    优先使用 OG 运行时，失败时回退到 USD Prim 属性；这样即使第二辆车的图
+        #    在启动时尚未完整注册，也能找到两辆车。
         for prim in stage.Traverse():
             p_path = prim.GetPath().pathString
             if not p_path.startswith(f"/World/{veh_name}"): continue
             if prim.GetTypeName() != "OmniGraphNode": continue
 
-            # Resolve node type: try OG runtime, then USD prim attribute as fallback
+            # 解析节点类型：先尝试 OG 运行时，再以 USD Prim 属性作为后备
             n_type = ""
             _og_node = None
             try:
@@ -744,10 +736,9 @@ def main():
             elif "SubscribeAckermannDrive" in n_type:
                 subscribe_node_path = p_path
 
-        # Find the OnPlaybackTick (or gate) node that drives the subscriber via
-        # USD attribute connection traversal.  This is more reliable than OG
-        # runtime API because it works even when the second vehicle's OmniGraph
-        # is not yet registered in the runtime at startup.
+        # 通过遍历 USD 属性连接，查找驱动订阅器的 OnPlaybackTick（或 Gate）节点。
+        # 该方法比 OG 运行时 API 更可靠，因为即使第二辆车的 OmniGraph 在启动时
+        # 尚未注册到运行时中，它仍然有效。
         sub_tick_path = ""
         if subscribe_node_path:
             try:
@@ -775,16 +766,16 @@ def main():
             ackermann_graph_path = graph_obj.get_path_to_graph()
             ctrl_node_name = ackermann_ctrl_path.split("/")[-1]
             
-            # Names for nodes we will inject
+            # 即将注入的节点名称
             tick_node_name = f"TeleopTick_{veh_name}_{i}"
             pub_node_name  = f"ViewportPublisher_{veh_name}_{i}"
             pub_tick_name  = f"PubTick_{veh_name}_{i}"
 
-            # 2. Inject Nodes
-            # Try to find a working ReadSimulationTime type
+            # 2. 注入节点
+            # 尝试查找可用的 ReadSimulationTime 类型
             time_node_type = "omni.isaac.core_nodes.IsaacReadSimulationTime"
-            # In some 5.x versions it might be isaacsim.core_nodes.IsaacReadSimulationTime
-            # We will try to create the graph nodes and handle failures gracefully
+            # 在某些 5.x 版本中，它可能是 isaacsim.core_nodes.IsaacReadSimulationTime
+            # 尝试创建图节点，并妥善处理失败情况
             
             create_cmds = [
                 (tick_node_name, "omni.graph.action.OnPlaybackTick"),
@@ -803,17 +794,14 @@ def main():
                 ctx_node_name = ros2_context_path.split("/")[-1]
                 connect_cmds.append((f"{ctx_node_name}.outputs:context", f"{pub_node_name}.inputs:context"))
 
-            # 3. Store control metadata FIRST — this must succeed even if node
-            #    injection below fails, so the vehicle enters the control loop
-            #    and og.Controller.set() can override the subscriber.
+            # 3. 首先保存控制元数据——即使下方节点注入失败，此步骤也必须成功，
+            #    以便车辆进入控制循环，并允许 og.Controller.set() 覆盖订阅器。
             _monitor_topic = veh_topic.rstrip("/") + "_teleop"
             _muted_topic   = veh_topic.rstrip("/") + "_muted"
-            # Discover subscriber→controller OmniGraph data connections.
-            # These connections carry the last received ROS2 values and always
-            # override og.Controller.set() authored values — even when the
-            # subscriber's tick is disabled. The only reliable fix is to
-            # disconnect them when entering TELEOP and reconnect for ROS2.
-            _sub_ctrl_conns = []  # list of (src_attr_path, dst_attr_path)
+            # 查找订阅器→控制器的 OmniGraph 数据连接。这些连接携带最后收到的
+            # ROS 2 值，即使订阅器的 Tick 已禁用，也始终会覆盖 og.Controller.set()
+            # 写入的值。唯一可靠的修复是在进入 TELEOP 时断开连接，切回 ROS 2 时重连。
+            _sub_ctrl_conns = []  # (src_attr_path, dst_attr_path) 列表
             if subscribe_node_path and ackermann_ctrl_path:
                 _ctrl_prim = stage.GetPrimAtPath(ackermann_ctrl_path)
                 for _inp in ("inputs:speed", "inputs:steeringAngle"):
@@ -841,15 +829,15 @@ def main():
             }
             print(f"[Teleop] Control paths registered for {veh_name} (graph: {ackermann_graph_path})")
 
-            # 4. Inject observability publisher node — non-critical, failures do
-            #    NOT prevent teleop; the vehicle is already in the control loop.
+            # 4. 注入用于观测的发布器节点——这不是关键路径；即使失败也不会阻止遥控，
+            #    因为车辆已经进入控制循环。
             try:
                 og.Controller.edit(graph_obj, {
                     og.Controller.Keys.CREATE_NODES: create_cmds,
                     og.Controller.Keys.SET_VALUES: set_cmds,
                 })
 
-                # Optional simulation-time node for accurate message timestamps
+                # 可选的仿真时间节点，用于生成准确的消息时间戳
                 time_node_name = f"ReadSimTime_{veh_name}_{i}"
                 try:
                     og.Controller.edit(graph_obj, {
@@ -865,7 +853,7 @@ def main():
                     except Exception:
                         print(f"[Teleop] Warning: Could not create IsaacReadSimulationTime for {veh_name}.")
 
-                # Wiring (done separately to handle connection conflicts)
+                # 连线（单独执行以处理连接冲突）
                 for src, dst in connect_cmds:
                     try:
                         og.Controller.connect(og.Controller.attribute(f"{ackermann_graph_path}/{src}"),
@@ -874,7 +862,7 @@ def main():
                         if "execIn" in dst: pass
                         else: print(f"[Teleop] Warning: Could not connect {src} -> {dst}")
 
-                # Route publisher to monitor topic so drive_topic is free for external ROS2
+                # 将发布器路由到监控话题，使 drive_topic 可供外部 ROS 2 使用
                 try:
                     og.Controller.set(
                         og.Controller.attribute(f"{ackermann_graph_path}/{pub_node_name}.inputs:topicName"),
@@ -896,19 +884,18 @@ def main():
     else:
         print(f"[Teleop] Successfully initialized {len(vehicle_teleop_publishers)} vehicle control path(s).")
 
-    # ── Sensor Graph Gating ──────────────────────────────────────────────────────
-    # For each vehicle, stop disabled sensors from publishing ROS2 data.
-    # Strategy: set inputs:enabled = False on the execution-source node
-    # (OnPlaybackTick / IsaacSimulationGate) to halt the whole graph, or on
-    # the individual camera / lidar publisher nodes for partial disables.
-    # USD SetActive() is NOT used — the OmniGraph runtime caches graphs after
-    # load and ignores prim activation state changes made at runtime.
+    # ── 传感器图门控 ────────────────────────────────────────────────────────────
+    # 阻止每辆车中已禁用的传感器发布 ROS 2 数据。
+    # 策略：在执行源节点（OnPlaybackTick / IsaacSimulationGate）上设置
+    # inputs:enabled = False 以停止整个图，或在各个相机/LiDAR 发布器节点上设置，
+    # 以实现局部禁用。不使用 USD SetActive()——OmniGraph 运行时会在加载后缓存图，
+    # 并忽略运行时对 Prim 激活状态的更改。
     _CAM_NODE_KW  = ("CameraHelper", "PublishImage", "PublishRgb", "RgbSensor")
     _LID_NODE_KW  = ("Lidar", "RTXLidar", "PointCloud", "PublishPointCloud", "LaserScan")
     _TICK_NODE_KW = ("OnPlaybackTick", "OnTick", "SimulationGate", "IsaacSimulationGate")
 
     def _sg_set_enabled(node_path, enabled):
-        """Set inputs:enabled on an OmniGraph node. Returns True if successful."""
+        """设置 OmniGraph 节点的 inputs:enabled；成功时返回 True。"""
         try:
             og.Controller.set(og.Controller.attribute(f"{node_path}.inputs:enabled"), enabled)
             return True
@@ -921,7 +908,7 @@ def main():
         _sg_en_cam = _sg_veh.get("enable_camera", True)
         _sg_en_lid = _sg_veh.get("enable_lidar",  True)
         if _sg_en_cam and _sg_en_lid:
-            continue  # both enabled — nothing to gate
+            continue  # 两者都已启用，无需门控
 
         _sg_base = f"/World/{_sg_name}"
         for _sg_prim in stage.Traverse():
@@ -938,15 +925,14 @@ def main():
                 if _sg_set_enabled(_sg_pp, False):
                     print(f"[Sensors] {_sg_name}: Disabled lidar helper '{_sg_pp}'")
 
-    # ── ROS2 Drive Bridge (AckermannDriveStamped + autoware_control_msgs/Control) ──
-    # Isaac Sim runs Python 3.12 but rclpy is compiled for Python 3.10 on ROS Humble.
-    # Delegate subscriptions to a Python 3.10 subprocess (drive_bridge.py), using the
-    # same pattern as gnss_bridge.py.  Commands arrive via subprocess stdout and are
-    # stored in _drive_cmds for the physics loop.  Map / TF data is sent to the
-    # subprocess via stdin after the scene has warmed up.
+    # ── ROS 2 驾驶桥接（AckermannDriveStamped + autoware_control_msgs/Control）──
+    # Isaac Sim 使用 Python 3.12，但 ROS Humble 中的 rclpy 为 Python 3.10 编译。
+    # 按照 gnss_bridge.py 的相同模式，将订阅委托给 Python 3.10 子进程
+    #（drive_bridge.py）。指令通过子进程标准输出到达并存入 _drive_cmds，供物理循环使用；
+    # 场景预热后，地图和 TF 数据通过标准输入发送给子进程。
     _ros_bridge_enabled = False
-    _drive_proc         = None   # subprocess.Popen handle
-    _drive_cmds         = {}     # veh_name -> {speed, steer, stamp, source}
+    _drive_proc         = None   # subprocess.Popen 句柄
+    _drive_cmds         = {}     # 映射：veh_name -> {speed, steer, stamp, source}
     _drive_log          = None
     try:
         import subprocess  as _drv_sub
@@ -966,12 +952,11 @@ def main():
             "AMENT_PREFIX_PATH":  "/opt/ros/humble",
             "LD_LIBRARY_PATH":    "/opt/ros/humble/lib:/opt/ros/humble/lib/x86_64-linux-gnu",
             "ROS_DOMAIN_ID":      _drv_os.environ.get("ROS_DOMAIN_ID", "0"),
-            # Inherit RMW from the parent process so drive_bridge uses the same
-            # middleware as the simulator host (defaults to rmw_cyclonedds_cpp
-            # when the parent has it set, which is the normal launch path).
+            # 从父进程继承 RMW，使 drive_bridge 与仿真器宿主使用相同的中间件。
+            # 正常启动路径中父进程会设置该值，此时默认采用 rmw_cyclonedds_cpp。
             **({"RMW_IMPLEMENTATION": _drv_os.environ["RMW_IMPLEMENTATION"]}
                if "RMW_IMPLEMENTATION" in _drv_os.environ else {}),
-            # Forward interface pinning if set (multi-NIC hosts)
+            # 若已设置网卡绑定，则将其传递给子进程（适用于多网卡主机）
             **({"CYCLONEDDS_URI": _drv_os.environ["CYCLONEDDS_URI"]}
                if "CYCLONEDDS_URI" in _drv_os.environ else {}),
         }
@@ -989,7 +974,7 @@ def main():
             env=_drv_env,
         )
 
-        # Send vehicle subscription registrations and record them for restart.
+        # 发送车辆订阅注册信息，并保存记录以供重启使用。
         _drv_sub_cmds = []
         for _veh in vehicles:
             if not _veh.get("enabled", True): continue
@@ -1001,7 +986,7 @@ def main():
         _drive_proc.stdin.write("start\n")
         _drive_proc.stdin.flush()
 
-        # Wait for bridge to signal readiness.
+        # 等待桥接程序发出就绪信号。
         _drv_ready = _drive_proc.stdout.readline().strip()
         _drive_log.flush()
         if _drv_ready != "ready":
@@ -1009,9 +994,8 @@ def main():
                 f"drive_bridge.py did not start correctly (got: {_drv_ready!r}); "
                 f"see {_drv_log_path} for details")
 
-        # Background thread: read drive commands from subprocess stdout.
-        # Takes the proc handle as an arg so the thread stays bound to the
-        # specific process it was started for (allows safe bridge restarts).
+        # 后台线程：从子进程标准输出读取驾驶指令。将进程句柄作为参数传入，
+        # 使线程始终绑定到启动它的特定进程，从而可以安全重启桥接程序。
         def _drive_reader(_proc):
             for _dl in _proc.stdout:
                 _dl = _dl.strip()
@@ -1030,21 +1014,20 @@ def main():
 
         _drv_threading.Thread(target=_drive_reader, args=(_drive_proc,), daemon=True).start()
         _ros_bridge_enabled = True
-        _drv_post_cmds = []   # map + static-TF commands, resent to fresh bridge on restart
+        _drv_post_cmds = []   # 地图和静态 TF 命令，重启时重新发送给新桥接进程
         print("[ROS2 Bridge] Drive bridge ready — AckermannDriveStamped on /drive, "
               "autoware_control_msgs/Control on /control")
     except Exception as _bridge_err:
         print(f"[ROS2 Bridge] Could not initialize drive bridge: {_bridge_err}")
 
-    # ── Global Timestamp Fix ───────────────────────────────────────────────────
-    # Runs after timeline.play() so the OmniGraph runtime is fully initialized.
-    # Uses node.get_attributes() to enumerate safely — calling node.get_attribute()
-    # directly on a non-existent attribute triggers C++ plugin errors in the log.
+    # ── 全局时间戳修复 ─────────────────────────────────────────────────────────
+    # 在 timeline.play() 之后运行，确保 OmniGraph 运行时已完全初始化。
+    # 使用 node.get_attributes() 安全枚举；直接对不存在的属性调用
+    # node.get_attribute() 会在日志中触发 C++ 插件错误。
     #
-    # The IsaacReadSimulationTime extension may not be loadable via CREATE_NODES
-    # with hardcoded type names (extension not registered for dynamic creation),
-    # even though baked-in USD instances work at load time.
-    # Solution: discover the exact registered type from an existing live instance.
+    # 即使 USD 中固化的实例能在加载时正常工作，IsaacReadSimulationTime 扩展也可能
+    # 无法通过带硬编码类型名的 CREATE_NODES 加载，因为扩展未注册为可动态创建。
+    # 解决方案：从现有活动实例中发现确切的已注册类型。
     _sim_time_node_type = None
     for _p in stage.Traverse():
         if _p.GetTypeName() != "OmniGraphNode":
@@ -1063,7 +1046,7 @@ def main():
     if _sim_time_node_type is None:
         print("[Timestamp Fix] WARNING: Could not discover IsaacReadSimulationTime type — timestamps may remain 0")
 
-    _graphs_needing_fix = {}  # graph_path_str -> (graph_obj, [node_local.inputs:timeStamp, ...])
+    _graphs_needing_fix = {}  # 映射：graph_path_str -> (graph_obj, [node_local.inputs:timeStamp, ...])
     for prim in stage.Traverse():
         if prim.GetTypeName() != "OmniGraphNode":
             continue
@@ -1071,13 +1054,13 @@ def main():
             node = og.get_node_by_path(prim.GetPath().pathString)
             if not node.is_valid():
                 continue
-            # Enumerate attributes safely to avoid C++ "attribute not found" errors
+            # 安全枚举属性，避免 C++ 的“找不到属性”错误
             attr_names = {a.get_name() for a in node.get_attributes()}
             if "inputs:timeStamp" not in attr_names:
                 continue
             ts_attr = node.get_attribute("inputs:timeStamp")
             if ts_attr.get_upstream_connection_count() > 0:
-                continue  # already driven
+                continue  # 已连接驱动源
             graph_obj = node.get_graph()
             graph_path = graph_obj.get_path_to_graph()
             node_local = prim.GetPath().pathString.split("/")[-1]
@@ -1090,9 +1073,9 @@ def main():
 
     _ts_fix_node_name = "GlobalSimTimeReader"
     for graph_path, (graph_obj, dst_attrs) in _graphs_needing_fix.items():
-        # Step 1: Look for any existing IsaacReadSimulationTime node already in this graph
-        # (e.g. ReadSimTime_*_* injected by teleop, or an existing baked-in instance).
-        # Prefer this over creating a new one, since dynamic CREATE_NODES can fail on some builds.
+        # 步骤 1：查找图中已有的 IsaacReadSimulationTime 节点，例如遥控功能注入的
+        # ReadSimTime_*_* 或已固化的实例。优先复用而不是新建，因为某些构建中的
+        # 动态 CREATE_NODES 可能失败。
         time_src_node = None
         for _p in stage.Traverse():
             if not _p.GetPath().pathString.startswith(graph_path + "/"):
@@ -1108,7 +1091,7 @@ def main():
             except Exception:
                 pass
 
-        # Step 2: If no existing node, try to create one (log the error if it fails)
+        # 步骤 2：如果没有现有节点，尝试创建一个；失败时记录错误
         if time_src_node is None:
             for _type in (_sim_time_node_type, "isaacsim.core_nodes.IsaacReadSimulationTime",
                           "omni.isaac.core_nodes.IsaacReadSimulationTime"):
@@ -1128,8 +1111,8 @@ def main():
             print(f"[Timestamp Fix] No sim time source available for {graph_path} — skipping")
             continue
 
-        # Step 3: Connect via direct node/attribute references (avoids og.Controller.attribute
-        # path-string resolution, which fails if the node was not successfully created above)
+        # 步骤 3：通过直接节点/属性引用建立连接，避免使用 og.Controller.attribute
+        # 的路径字符串解析；若上方节点未成功创建，该解析会失败
         src_attr = time_src_node.get_attribute("outputs:simulationTime")
         if not src_attr.is_valid():
             print(f"[Timestamp Fix] outputs:simulationTime not found on time node in {graph_path}")
@@ -1149,18 +1132,17 @@ def main():
             except Exception as _e:
                 print(f"[Timestamp Fix] Warning: Could not connect -> {graph_path}/{dst}: {_e}")
 
-    # ── OmniGraph Sensor Topic Remapping (Post-Play Pass) ────────────────────────
-    # The pre-play USD pass only catches authored attributes (prim.GetAttributes()).
-    # OmniGraph nodes whose inputs:topicName was never explicitly set in the USD use
-    # default values (e.g. "imu", "rgb") that are invisible to the USD scan.
-    # After timeline.play() the OmniGraph runtime is live, so node.get_attributes()
-    # exposes all inputs including defaults — this pass catches the missed ones.
+    # ── OmniGraph 传感器话题重映射（播放后阶段）────────────────────────────────
+    # 播放前的 USD 扫描只能捕获已写入的属性（prim.GetAttributes()）。
+    # 若 OmniGraph 节点的 inputs:topicName 从未在 USD 中显式设置，它会使用默认值
+    #（如 "imu"、"rgb"），而 USD 扫描无法看到这些值。timeline.play() 之后，
+    # OmniGraph 运行时已激活，node.get_attributes() 会暴露包括默认值在内的所有输入，
+    # 因此本阶段可捕获之前遗漏的属性。
     _sensor_topics_set = set(sensor_topics)
-    # Collect (node_path, attr_name, value) tuples for frame ID remaps so they
-    # can be re-applied every tick.  OmniGraph nodes may reset authored attribute
-    # values to their defaults after events such as graph re-evaluation or after
-    # a new connection is made, so a one-time post-play write is not reliable.
-    _og_frame_id_remaps = []   # [(node_path_str, og_attr_name_str, new_val_str), ...]
+    # 收集坐标系 ID 重映射的 (node_path, attr_name, value) 元组，以便每个 Tick
+    # 重新应用。图重新求值或建立新连接等事件后，OmniGraph 节点可能把已写入属性
+    # 重置为默认值，因此仅在播放后写入一次并不可靠。
+    _og_frame_id_remaps = []   # 元组列表：[(node_path_str, og_attr_name_str, new_val_str), ...]
     for veh in vehicles:
         if not veh.get("enabled", True):
             continue
@@ -1183,7 +1165,7 @@ def main():
                         continue
                     if "type" in candidate.lower() or "format" in candidate.lower():
                         continue
-                    # Try OG attr.get() first, fall back to USD prim attribute
+                    # 先尝试 OG attr.get()，失败时回退到 USD Prim 属性
                     val = None
                     og_attr = node.get_attribute(candidate)
                     for _getter in (lambda: og_attr.get(),
@@ -1201,9 +1183,9 @@ def main():
                     if normalized not in _sensor_topics_set:
                         continue
                     if val.startswith(topic_prefix):
-                        continue  # already remapped by the pre-play pass
+                        continue  # 已由播放前流程完成重映射
                     new_val = topic_prefix + normalized
-                    # Write via USD prim API (reliable) and attempt OG attr as well
+                    # 通过可靠的 USD Prim API 写入，同时也尝试写入 OG 属性
                     prim.GetAttribute(candidate).Set(new_val)
                     try:
                         og_attr.set(new_val)
@@ -1217,11 +1199,11 @@ def main():
         if _og_remap_count > 0:
             print(f"[ROS2 remap OG] {veh_name}: {_og_remap_count} additional topic(s) remapped post-play")
 
-        # ── Frame ID remapping (post-play OG pass) ────────────────────────────
-        # Scans all OmniGraph node attributes whose name contains "FrameId" and
-        # remaps base values ("odom", "base_link") to namespaced ones ("ego/odom").
+        # ── 坐标系 ID 重映射（播放后的 OG 阶段）───────────────────────────────
+        # 扫描名称中包含 "FrameId" 的所有 OmniGraph 节点属性，将基础值
+        #（"odom"、"base_link"）重映射为带命名空间的值（"ego/odom"）。
         if _frame_ids_set:
-            _pfx_ns = topic_prefix.strip("/")  # e.g. "ego"
+            _pfx_ns = topic_prefix.strip("/")  # 例如 "ego"
             _fid_count = 0
             for prim in stage.Traverse():
                 p_path = prim.GetPath().pathString
@@ -1243,8 +1225,8 @@ def main():
                             try: _oa.set(_new_fval)
                             except Exception: pass
                             _fid_count += 1
-                            # Record for per-tick re-application (OG nodes may
-                            # reset authored values to defaults after graph events).
+                            # 保存记录以便每个 Tick 重新应用，因为图事件后 OG 节点
+                            # 可能把已写入值重置为默认值。
                             _og_frame_id_remaps.append((p_path, _aname, _new_fval))
                             print(f"[ROS2 remap OG] {veh_name}: {prim.GetPath().GetName()}.{_aname} "
                                   f"'{_fval}' -> '{_new_fval}'")
@@ -1253,21 +1235,20 @@ def main():
             if _fid_count > 0:
                 print(f"[ROS2 remap OG] {veh_name}: {_fid_count} frame ID(s) remapped post-play")
 
-        # ── PoseTree (TF publisher) parentPrim validity diagnostic ────────────
-        # The "[PoseTree] parent getObjectType eInvalid" flood means a
-        # ROS2PublishTransformTree node cannot resolve its parentPrim/targetPrims
-        # at evaluation time — so NO base_link->sensor transforms are published
-        # and the TF chain (map->odom->base_link->sensors) is broken downstream.
-        # The usual causes: the prim lives inside an instanceable reference
-        # (interior prims unresolvable), or it isn't an Xformable.  Report the
-        # exact prim type + instanceable status so the node can be fixed.
+        # ── PoseTree（TF 发布器）parentPrim 有效性诊断 ─────────────────────────
+        # 大量出现 ``[PoseTree] parent getObjectType eInvalid``，表示
+        # ROS2PublishTransformTree 节点在求值时无法解析 parentPrim/targetPrims，
+        # 因而不会发布任何 base_link->传感器变换，下游 TF 链
+        #（map->odom->base_link->传感器）会断开。常见原因是 Prim 位于可实例化引用内部
+        #（内部 Prim 无法解析），或它不是 Xformable。报告确切 Prim 类型和可实例化状态，
+        # 以便修复该节点。
         def _pt_prim_report(_pp):
             _pp = str(_pp)
             _pr = stage.GetPrimAtPath(_pp)
             if not _pr or not _pr.IsValid():
                 return f"{_pp}  ->  MISSING (no prim at path)"
-            # Walk ancestors to flag any instanceable parent, which hides
-            # interior prims from Fabric/PhysX and yields eInvalid.
+            # 向上遍历祖先节点，标记会对 Fabric/PhysX 隐藏内部 Prim 并产生 eInvalid
+            # 的所有可实例化父节点。
             _anc = _pr.GetParent()
             _anc_inst = None
             while _anc and _anc.IsValid() and _anc.GetPath().pathString not in ("/", ""):
@@ -1315,7 +1296,7 @@ def main():
             for _pp in _tgts:
                 print(f"[PoseTree diag]   target: {_pt_prim_report(_pp)}")
 
-    # ── Post-play sensor helper disable (OG runtime now fully initialized) ────
+    # ── 播放后禁用传感器辅助节点（此时 OG 运行时已完全初始化）────────────────
     for _sg_veh in vehicles:
         if not _sg_veh.get("enabled", True): continue
         _sg_name   = _sg_veh.get("name", "")
@@ -1338,12 +1319,10 @@ def main():
                 if _sg_set_enabled(_sg_pp, False):
                     print(f"[Sensors] {_sg_name}: Disabled lidar helper '{_sg_pp}' (post-play)")
 
-    # ── Map Generation and Publishing ─────────────────────────────────────────
-    # Renders one top-down orthographic semantic segmentation frame to build a
-    # nav_msgs/OccupancyGrid from the environment meshes, then publishes it on
-    # /map with TRANSIENT_LOCAL (latched) QoS so late subscribers receive it.
-    # Also publishes a static map→odom identity transform so the TF tree is
-    # complete: map → odom → base_link.
+    # ── 地图生成与发布 ─────────────────────────────────────────────────────────
+    # 渲染一帧俯视正交语义分割图，根据环境网格构建 nav_msgs/OccupancyGrid，
+    # 然后使用 TRANSIENT_LOCAL（锁存）QoS 发布到 /map，使延迟加入的订阅器也能收到。
+    # 同时发布静态 map→odom 单位变换，使 TF 树完整：map → odom → base_link。
     _map_cfg     = config.get("map_server", {})
     _map_enabled = _map_cfg.get("enabled", False)
 
@@ -1358,10 +1337,9 @@ def main():
             _map_res   = float(_map_cfg.get("resolution", 0.05))
             _map_stage = omni.usd.get_context().get_stage()
 
-            # Assign semantic labels to environment meshes if not done already.
-            # seg_id_keywords / seg_default_id / seg_enabled are defined later in
-            # the segmentation setup block; use locals().get() to handle the case
-            # where the map section runs before that block.
+            # 若尚未分配，则为环境网格指定语义标签。seg_id_keywords、seg_default_id
+            # 和 seg_enabled 在后面的分割设置块中定义；使用 locals().get() 处理
+            # 地图部分先于该设置块运行的情况。
             _map_id_kws = locals().get("seg_id_keywords") or {0: ["default"], 1: ["track"]}
             _map_def_id = locals().get("seg_default_id", 0)
 
@@ -1393,23 +1371,23 @@ def main():
                 if _lbl_n:
                     print(f"[Map] Assigned semantic labels to {_lbl_n} environment meshes")
 
-            # Compute environment bounding box (world space, 5 % margin).
+            # 计算环境包围盒（世界坐标，保留 5% 边距）。
             _map_env = _map_stage.GetPrimAtPath("/World/Environment")
             _map_bbc = _MapUG.BBoxCache(_MapUsd.TimeCode.Default(), ["default", "render"])
             _map_br  = _map_bbc.ComputeWorldBound(_map_env).GetRange()
             _map_mn_pt, _map_mx_pt = _map_br.GetMin(), _map_br.GetMax()
-            _map_ex  = (_map_mx_pt[0] - _map_mn_pt[0]) * 1.05   # X extent + margin
-            _map_ey  = (_map_mx_pt[1] - _map_mn_pt[1]) * 1.05   # Y extent + margin
+            _map_ex  = (_map_mx_pt[0] - _map_mn_pt[0]) * 1.05   # X 方向范围加边距
+            _map_ey  = (_map_mx_pt[1] - _map_mn_pt[1]) * 1.05   # Y 方向范围加边距
             _map_cx  = (_map_mn_pt[0] + _map_mx_pt[0]) / 2
             _map_cy  = (_map_mn_pt[1] + _map_mx_pt[1]) / 2
-            _map_cz  = float(_map_mx_pt[2]) + 20.0               # 20 m above highest point
+            _map_cz  = float(_map_mx_pt[2]) + 20.0               # 位于最高点上方 20 米
             _map_orig_x = _map_cx - _map_ex / 2
             _map_orig_y = _map_cy - _map_ey / 2
             _map_pw  = min(4096, max(64, int(_map_ex / _map_res)))
             _map_ph  = min(4096, max(64, int(_map_ey / _map_res)))
 
-            # Create top-down orthographic camera.
-            # aperture in "tenths of scene units" (= cm when stage unit = m).
+            # 创建俯视正交相机。
+            # aperture 的单位是“场景单位的十分之一”（Stage 单位为米时即厘米）。
             _map_cp  = "/World/_MapCamera"
             _map_cam = _MapUG.Camera.Define(_map_stage, _map_cp)
             _map_cam.GetProjectionAttr().Set(_MapUG.Tokens.orthographic)
@@ -1419,10 +1397,10 @@ def main():
                 _MapGf.Vec2f(0.1, _map_cz + abs(float(_map_mn_pt[2])) + 10.0))
             _map_xf = _MapUG.Xformable(_map_cam)
             _map_xf.ClearXformOpOrder()
-            # Identity rotation: camera looks in -Z (straight down in Z-up world).
+            # 单位旋转：相机朝向 -Z（在 Z 轴向上的世界中垂直向下）。
             _map_xf.AddTranslateOp().Set(_MapGf.Vec3d(_map_cx, _map_cy, _map_cz))
 
-            # Attach semantic annotator, warm up renderer, then capture.
+            # 挂载语义标注器，预热渲染器，然后采集。
             _map_rp     = _map_rep.create.render_product(_map_cp, (_map_pw, _map_ph))
             _map_annot  = _map_rep.AnnotatorRegistry.get_annotator(
                 "semantic_segmentation", init_params={"colorize": False})
@@ -1434,10 +1412,10 @@ def main():
 
             _map_sd  = _map_annot.get_data()
             _map_i2l = _map_sd.get("info", {}).get("idToLabels", {})
-            _map_arr = _map_sd.get("data")   # (H, W) uint32
+            _map_arr = _map_sd.get("data")   # 形状为 (H, W) 的 uint32 数组
 
             if _map_arr is not None and _map_arr.size > 0:
-                # Map replicator IDs → occupancy values (0=free, 100=occupied, -1=unknown).
+                # 将 Replicator ID 映射为占据值（0=空闲，100=占据，-1=未知）。
                 _map_l2v = {}
                 for _rid, _li in _map_i2l.items():
                     try:
@@ -1447,11 +1425,11 @@ def main():
                         _map_l2v[int(_rid)] = -1
                 _map_occ = _map_np.vectorize(
                     lambda v: _map_l2v.get(int(v), -1), otypes=[_map_np.int8])(_map_arr)
-                # Image row 0 = world max_Y; OccupancyGrid row 0 = world min_Y → flip.
+                # 图像第 0 行对应世界 max_Y，而 OccupancyGrid 第 0 行对应世界 min_Y，因此需翻转。
                 _map_occ = _map_np.flipud(_map_occ)
 
-                # Serialize occupancy data as base64-packed signed bytes and send
-                # to drive_bridge.py subprocess for publishing via rclpy.
+                # 将占据数据序列化为 Base64 打包的有符号字节，并发送给 drive_bridge.py
+                # 子进程，由其通过 rclpy 发布。
                 _map_flat = _map_occ.flatten().tolist()
                 _map_raw  = _map_struct.pack(f"{len(_map_flat)}b", *_map_flat)
                 _map_db64 = _map_b64.b64encode(_map_raw).decode("ascii")
@@ -1462,7 +1440,7 @@ def main():
                 _drv_post_cmds.append(_map_cmd)
                 print(f"[Map] Sent /map to bridge: {_map_pw}×{_map_ph} cells @ {_map_res} m/cell")
 
-                # Static map→{prefix}/odom identity transforms, one per enabled vehicle.
+                # 为每辆已启用车辆发布一个静态 map→{prefix}/odom 单位变换。
                 _odom_frames = []
                 for _mv in vehicles:
                     if not _mv.get("enabled", True): continue
@@ -1489,28 +1467,27 @@ def main():
             print(f"[Map] Error during map generation: {_map_err}")
             _map_tb.print_exc()
 
-    # Pre-initialise GNSS restart variables so the main loop can safely test
-    # them even when GNSS is disabled or its setup block hasn't run.
+    # 预先初始化 GNSS 重启变量，使主循环即使在 GNSS 已禁用或其设置块尚未运行时，
+    # 也能安全检查这些变量。
     _gnss_proc   = None
     _gnss_script = None
     _gnss_env    = None
     _gnss_log    = None
 
-    # ── GNSS Sensor Setup ─────────────────────────────────────────────────────
-    # Reads each vehicle's base_link world position from USD every frame, converts
-    # it to WGS-84 coordinates via equirectangular projection from the configured
-    # map origin, adds configurable Gaussian noise, and publishes
-    # sensor_msgs/NavSatFix on /{topic_prefix}/gnss at the requested rate.
+    # ── GNSS 传感器设置 ────────────────────────────────────────────────────────
+    # 每帧从 USD 读取各车辆 base_link 的世界位置，以配置的地图原点为基准，
+    # 通过等距圆柱投影转换为 WGS-84 坐标，加入可配置的高斯噪声，
+    # 并按要求的频率在 /{topic_prefix}/gnss 上发布 sensor_msgs/NavSatFix。
     _gnss_cfg         = config.get("gnss", {})
     _gnss_enabled     = _gnss_cfg.get("enabled", False)
-    _gnss_publishers  = {}   # veh_name -> rclpy Publisher<NavSatFix>
-    _gnss_bridge      = None  # rclpy node used for publisher creation and clock
+    _gnss_publishers  = {}   # 映射：veh_name -> rclpy Publisher<NavSatFix>
+    _gnss_bridge      = None  # 用于创建发布器和提供时钟的 rclpy 节点
     _gnss_frame_skip  = 1
     _gnss_lat0 = _gnss_lon0 = _gnss_alt0 = 0.0
     _gnss_h_std = _gnss_v_std = 0.0
     _gnss_cos_lat0 = 1.0
-    _gnss_hud_data = {}  # veh_name -> (lat, lon) for HUD display
-    _R_EARTH = 6_371_000.0   # mean Earth radius, metres
+    _gnss_hud_data = {}  # veh_name -> (lat, lon)，用于 HUD 显示
+    _R_EARTH = 6_371_000.0   # 地球平均半径，单位：米
 
     if _gnss_enabled:
         try:
@@ -1528,10 +1505,9 @@ def main():
             _gnss_frame_skip = max(1, int(round(app_freq / _gnss_rate)))
             _gnss_cos_lat0   = _gnss_math.cos(_gnss_math.radians(_gnss_lat0))
 
-            # Isaac Sim's Python 3.12 cannot import rclpy (compiled for 3.10).
-            # Delegate publishing to a Python 3.10 subprocess (gnss_bridge.py)
-            # that reads tab-separated GNSS records from stdin and publishes
-            # sensor_msgs/NavSatFix via rclpy.
+            # Isaac Sim 的 Python 3.12 无法导入为 Python 3.10 编译的 rclpy。
+            # 将发布任务委托给 Python 3.10 子进程 gnss_bridge.py；它从标准输入读取
+            # 制表符分隔的 GNSS 记录，并通过 rclpy 发布 sensor_msgs/NavSatFix。
             import subprocess as _gnss_subprocess
             import os as _gnss_os
             import time as _gnss_time
@@ -1539,8 +1515,8 @@ def main():
             _gnss_script = _gnss_os.path.join(
                 _gnss_os.path.dirname(_gnss_os.path.abspath(__file__)),
                 "gnss_bridge.py")
-            # Use a minimal environment to avoid Isaac Sim's LD_LIBRARY_PATH
-            # and PYTHONPATH contaminating the Python 3.10 subprocess.
+            # 使用最小化环境，避免 Isaac Sim 的 LD_LIBRARY_PATH 和 PYTHONPATH
+            # 污染 Python 3.10 子进程。
             _gnss_env = {
                 "HOME":             _gnss_os.environ.get("HOME", "/root"),
                 "USER":             _gnss_os.environ.get("USER", "root"),
@@ -1550,10 +1526,10 @@ def main():
                 "AMENT_PREFIX_PATH": "/opt/ros/humble",
                 "LD_LIBRARY_PATH":   "/opt/ros/humble/lib:/opt/ros/humble/lib/x86_64-linux-gnu",
                 "ROS_DOMAIN_ID":     _gnss_os.environ.get("ROS_DOMAIN_ID", "0"),
-                # Match the parent's RMW so all nodes use the same middleware.
+                # 与父进程的 RMW 保持一致，使所有节点使用相同中间件。
                 **({"RMW_IMPLEMENTATION": _gnss_os.environ["RMW_IMPLEMENTATION"]}
                    if "RMW_IMPLEMENTATION" in _gnss_os.environ else {}),
-                # Forward NIC pinning so the GNSS node binds to the same interface.
+                # 传递网卡绑定设置，使 GNSS 节点绑定到相同接口。
                 **({"CYCLONEDDS_URI": _gnss_os.environ["CYCLONEDDS_URI"]}
                    if "CYCLONEDDS_URI" in _gnss_os.environ else {}),
             }
@@ -1570,7 +1546,7 @@ def main():
                 text=True,
                 env=_gnss_env,
             )
-            # Block until the bridge signals it is ready (or dies trying).
+            # 阻塞等待桥接程序发出就绪信号，或因启动失败而退出。
             _gnss_ready = _gnss_proc.stdout.readline().strip()
             _gnss_log.flush()
             if _gnss_ready != "ready":
@@ -1601,8 +1577,8 @@ def main():
     else:
         print("[GNSS] Disabled via config.")
 
-    # ── Discover IMU and Odometry OmniGraph nodes for HUD readback ────────────
-    vehicle_sensor_nodes = {}  # veh_name -> {"imu_path": str|None, "odom_path": str|None}
+    # ── 查找 IMU 和里程计 OmniGraph 节点，供 HUD 回读 ────────────────────────
+    vehicle_sensor_nodes = {}  # 映射：veh_name -> {"imu_path": str|None, "odom_path": str|None}
     for veh in vehicles:
         if not veh.get("enabled", True): continue
         veh_name = veh.get("name", "Vehicle")
@@ -1627,18 +1603,18 @@ def main():
         vehicle_sensor_nodes[veh_name] = {"imu_path": imu_path, "odom_path": odom_path}
         print(f"[HUD] {veh_name}: odom_path={odom_path}, imu_path={imu_path}")
     
-    # ── Follow Camera Persistence Configs ────────────────────────────────
-    veh_follow_configs = {} # veh_name -> {base_path, front_path, rear_path, dist, height}
+    # ── 跟随相机持久化配置 ───────────────────────────────────────────────────
+    veh_follow_configs = {} # 映射：veh_name -> {base_path, front_path, rear_path, dist, height}
     fc_cfg = config.get("follow_camera", {})
     for veh in vehicles:
         if not veh.get("enabled", True): continue
-        # Follow camera is now always enabled for any active vehicle
+        # 现在对所有活动车辆始终启用跟随相机
         
         veh_name = veh.get("name", "Vehicle")
         veh_prim_path = f"/World/{veh_name}"
         
-        # Discover chassis and markers once at startup
-        # We look for "Chassis" or "base_link" (case-insensitive)
+        # 启动时只查找一次底盘和标记点
+        # 查找 "Chassis" 或 "base_link"（不区分大小写）
         chassis_prim = None
         front_p = None
         rear_p = None
@@ -1649,13 +1625,13 @@ def main():
             
             p_name = p.GetName().lower()
             if p.GetTypeName() != "OmniGraphNode":
-                # Priority: "chassis" then "base_link"
+                # 优先级：先 "chassis"，再 "base_link"
                 if "chassis" in p_name and not chassis_prim:
                     chassis_prim = p
                 elif "base_link" in p_name and not chassis_prim:
                     chassis_prim = p
                 
-                # Markers for forward axis
+                # 前向轴标记点
                 if "front" in p_name and not front_p: front_p = p
                 if ("rear" in p_name or "back" in p_name) and not rear_p: rear_p = p
             
@@ -1674,15 +1650,15 @@ def main():
                 "cam_name": _cam_name_map.get(veh_name, "FollowCamera"),
             }
 
-    follow_cam_handles = {} # Internal tracking for the simulation loop
+    follow_cam_handles = {} # 仿真循环的内部跟踪状态
 
-    # ── Viewport HUD Overlay ──────────────────────────────────────────────────
+    # ── 视口 HUD 叠加层 ───────────────────────────────────────────────────────
     HUD_ENABLED = False
     hud_labels  = {}
     ip_bar_window = None
     opp_hud_window = None
-    _hud_all_windows = []  # all HUD windows; toggled together by the / key
-    _split_active = False  # set properly inside HUD block; False in headless mode
+    _hud_all_windows = []  # 所有 HUD 窗口；按 / 键统一切换
+    _split_active = False  # 在 HUD 代码块内正确设置；无头模式下为 False
     try:
         if headless_mode:
             raise RuntimeError("headless – skipping HUD")
@@ -1690,20 +1666,20 @@ def main():
 
         HUD_ENABLED = True
         
-        # ── Color constants (omni.ui = 0xAABBGGRR) ───────────────────────────
-        C_BLACK  = 0xFF000000   # fully opaque black
-        C_CYAN   = 0xFFFFD400   # bright cyan  (R=0x00 G=0xD4 B=0xFF A=0xFF)
-        C_WHITE  = 0xFFFFFFFF   # white
-        C_GREY   = 0xFF999999   # muted grey
-        C_ORANGE = 0xFF4488FF   # orange       (R=0xFF G=0x88 B=0x44 A=0xFF)
-        C_BLUE   = 0xFFFF8800   # dodger blue  (R=0x00 G=0x88 B=0xFF A=0xFF)
+        # ── 颜色常量（omni.ui = 0xAABBGGRR）──────────────────────────────────
+        C_BLACK  = 0xFF000000   # 完全不透明的黑色
+        C_CYAN   = 0xFFFFD400   # 亮青色（R=0x00 G=0xD4 B=0xFF A=0xFF）
+        C_WHITE  = 0xFFFFFFFF   # 白色
+        C_GREY   = 0xFF999999   # 柔和灰色
+        C_ORANGE = 0xFF4488FF   # 橙色（R=0xFF G=0x88 B=0x44 A=0xFF）
+        C_BLUE   = 0xFFFF8800   # 道奇蓝（R=0x00 G=0x88 B=0xFF A=0xFF）
         
         CARD_W = 228
         CARD_H = 516
         GAP    = 19
 
         enabled_vehicles = [v for v in vehicles if v.get("enabled", True)]
-        # In split-screen mode the main (left) window shows only the Ego vehicle.
+        # 分屏模式下，主（左侧）窗口只显示自车。
         _split_active = _ui_split_screen and len(enabled_vehicles) >= 2
         _main_vehs = [v for v in enabled_vehicles
                       if not _split_active or "Ego" in v.get("name", "")]
@@ -1711,14 +1687,14 @@ def main():
                       if _split_active and "Ego" not in v.get("name", "")]
         _n_veh = max(1, len(_main_vehs))
 
-        # Scale card height so the combined HUD never exceeds the Isaac Sim window height.
-        # position_y=100 consumes 100 px at the top; reserve 20 px at the bottom.
+        # 缩放卡片高度，确保组合后的 HUD 不超过 Isaac Sim 窗口高度。
+        # position_y=100 会占用顶部 100 像素，底部再预留 20 像素。
         _app_win    = omni.appwindow.get_default_app_window()
         _win_h      = _app_win.get_height() if _app_win else render_res[1]
         _avail_h    = _win_h - 120
         _card_h_fit = int((_avail_h - 16) / _n_veh - GAP)
         CARD_H = int(min(CARD_H, max(100, _card_h_fit)) * 0.7)
-        _sc = CARD_H / 430  # scale factor relative to default card height
+        _sc = CARD_H / 430  # 相对默认卡片高度的缩放系数
 
         CARD_W      = max(120, int(190 * _sc))
         FONT_HEADER = max(9,   int(22  * _sc))
@@ -1745,7 +1721,7 @@ def main():
                 | ui.WINDOW_FLAGS_NO_MOVE
             ),
         )
-        # Transparent window frame — cards have their own background
+        # 使用透明窗口边框——卡片自身带有背景
         hud_window.frame.set_style({"background_color": 0x00000000})
 
         hud_labels = {}
@@ -1759,16 +1735,16 @@ def main():
 
         with hud_window.frame:
             with ui.VStack(spacing=GAP, width=total_w):
-                # Sort to ensure Ego is on top
+                # 排序以确保自车位于顶部
                 sorted_vehs = sorted(_main_vehs, key=lambda x: "Ego" not in x["name"])
                 for veh in sorted_vehs:
                     veh_name = veh.get("name", "Vehicle")
                     models = {}
                     with ui.ZStack(width=CARD_W, height=CARD_H):
-                        # Background — semi-transparent dark gray (0xAABBGGRR: A=0x55, RGB=0x383838)
+                        # 背景——半透明深灰色（0xAABBGGRR：A=0x55，RGB=0x383838）
                         ui.Rectangle(style={"background_color": 0x55383838, "border_radius": 8})
                         with ui.VStack(spacing=2, margin=CARD_MARGIN):
-                            # Header
+                            # 标题栏
                             is_ego = "Ego" in veh_name
                             h_color = C_CYAN if is_ego else C_WHITE
                             header_label = ui.Label(veh_name.replace("_", " "),
@@ -1811,7 +1787,7 @@ def main():
 
         print("[HUD] Viewport overlay window created.")
 
-        # ── Opponent HUD window (split-screen right side) ─────────────────────
+        # ── 对手车 HUD 窗口（分屏右侧）───────────────────────────────────────
         opp_hud_window = None
         _hud_all_windows = [hud_window]
         if _split_active and _opp_vehs:
@@ -1891,7 +1867,7 @@ def main():
         hud_labels = {}
         print(f"[HUD] Initialization Error: {e}")
 
-    # Defensive Keyboard Constant Discovery
+    # 防御式查找键盘常量
     def get_key(cand_list):
         for c in cand_list:
             if hasattr(carb.input.KeyboardInput, c):
@@ -1908,14 +1884,14 @@ def main():
     K_GRAVE     = get_key(["GRAVE", "BACK_QUOTE", "BACKQUOTE", "TILDE", "ACCENT_GRAVE",
                             "GRAVE_ACCENT", "OEM_3", "SECTION"])
     if K_GRAVE is None:
-        # Dynamic fallback: scan every KeyboardInput attribute for a grave/backtick match
+        # 动态后备方案：扫描每个 KeyboardInput 属性，查找重音符/反引号对应项
         for _kname in dir(carb.input.KeyboardInput):
             if any(s in _kname.upper() for s in ("GRAVE", "BACKTICK", "BACK_QUOTE", "TILDE")):
                 K_GRAVE = getattr(carb.input.KeyboardInput, _kname)
                 print(f"[Input] Found grave/backtick key via scan: {_kname}")
                 break
 
-    # Log all discovered key bindings at startup
+    # 启动时记录所有已发现的按键绑定
     print(f"[Input] Key bindings: 1={K_1}, 2={K_2}, F1={K_F1}, F2={K_F2}, /={K_SLASH}, R={K_R}, Backspace={K_BACKSPACE}, `={K_GRAVE}")
     if K_1 is None: print("[Input] Warning: Could not find key for '1'.")
     if K_2 is None: print("[Input] Warning: Could not find key for '2'.")
@@ -1925,11 +1901,11 @@ def main():
     if K_GRAVE is None:
         print("  " + ", ".join(n for n in dir(carb.input.KeyboardInput) if not n.startswith("_")))
 
-    # ── Simulation Selection & Interaction State ──────────────────────────────
+    # ── 仿真选择与交互状态 ─────────────────────────────────────────────────────
     selected_vehicle_name = "Ego_Vehicle"
-    _vp2_api     = None              # viewport_api of Viewport 2, stored at split-screen setup
-    _vp1_showing = "Ego_Vehicle"     # vehicle camera currently shown in Viewport 1
-    _vp2_showing = "Opponent_Vehicle"  # vehicle camera currently shown in Viewport 2
+    _vp2_api     = None              # 视口 2 的 viewport_api，在分屏设置时保存
+    _vp1_showing = "Ego_Vehicle"     # 当前显示在视口 1 中的车辆相机
+    _vp2_showing = "Opponent_Vehicle"  # 当前显示在视口 2 中的车辆相机
     slash_pressed_last = False
     r_pressed_last = False
     grave_pressed_last = False
@@ -1937,25 +1913,25 @@ def main():
     choice_keys_pressed_last = {}
     if K_1: choice_keys_pressed_last[K_1] = False
     if K_2: choice_keys_pressed_last[K_2] = False
-    key1_hold_start = None   # time.monotonic() when key 1 was first pressed
-    key2_hold_start = None   # time.monotonic() when key 2 was first pressed
-    key1_toggle_fired = False  # True once hold-toggle fires, suppress until release
+    key1_hold_start = None   # 首次按下按键 1 时的 time.monotonic()
+    key2_hold_start = None   # 首次按下按键 2 时的 time.monotonic()
+    key1_toggle_fired = False  # 长按切换触发后为 True，松开前保持抑制
     key2_toggle_fired = False
 
-    CTRL_HOLD_DURATION = 1.0  # seconds hold required to toggle control mode
+    CTRL_HOLD_DURATION = 1.0  # 切换控制模式所需的长按秒数
 
-    # Per-vehicle explicit control mode: "KEYBOARD_CONTROL" or "ROS2_CONTROL". Toggled by holding 1/2.
-    # In headless mode all vehicles default to ROS2_CONTROL (no keyboard available).
-    # Otherwise the default comes from user_interface.default_control_mode in the config.
+    # 每辆车的显式控制模式："KEYBOARD_CONTROL" 或 "ROS2_CONTROL"，长按 1/2 切换。
+    # 无头模式下没有键盘，所有车辆默认使用 ROS2_CONTROL；否则默认值来自配置中的
+    # user_interface.default_control_mode。
     if headless_mode:
         _default_ctrl = "ROS2_CONTROL"
     else:
         _default_ctrl = "ROS2_CONTROL" if _ui_default_ctrl_mode == "ROS2_CONTROL" else "KEYBOARD_CONTROL"
     veh_ctrl_mode = {veh["name"]: _default_ctrl for veh in vehicles if veh.get("enabled", True)}
-    # Track the last mode each vehicle's OmniGraph publisher was routed for,
-    # so we only call og.Controller.set() on the topicName when it actually changes.
-    _pub_routed_mode = {}  # veh_name -> "KEYBOARD_CONTROL" or "ROS2_CONTROL"
-    _last_n_status_lines = 0  # how many status lines were last printed (for cursor-up)
+    # 记录每辆车 OmniGraph 发布器上次路由到的模式，只有 topicName 实际变化时
+    # 才调用 og.Controller.set()。
+    _pub_routed_mode = {}  # veh_name -> "KEYBOARD_CONTROL" 或 "ROS2_CONTROL"
+    _last_n_status_lines = 0  # 上次打印的状态行数（用于光标上移）
 
     is_recording = False
     seg_capture_index = 0
@@ -1969,10 +1945,10 @@ def main():
 
     def switch_selection(new_name):
         nonlocal selected_vehicle_name, _vp1_showing, _vp2_showing
-        # Always update the follow camera, even if this vehicle is already selected
+        # 始终更新跟随相机，即使该车辆已经被选中
         if new_name in veh_follow_configs:
             _cfg = veh_follow_configs[new_name]
-            # Track which viewport receives this camera for keyboard routing and HUD content
+            # 记录接收此相机的视口，用于键盘路由和 HUD 内容
             if _split_active and _vp2_api is not None:
                 try:
                     from omni.kit.viewport.utility import get_active_viewport as _gav
@@ -1985,7 +1961,7 @@ def main():
                     pass
             _set_viewport_camera(f"/World/{_cfg['cam_name']}")
 
-        # Only update selection state and HUD if vehicle actually changed
+        # 仅在车辆确实发生变化时更新选择状态和 HUD
         if new_name == selected_vehicle_name: return
         if new_name not in vehicle_teleop_publishers: return
 
@@ -1998,7 +1974,7 @@ def main():
                     color = C_BLUE if (new_name == v_name) else C_WHITE
                     models["header"].style = {"color": color, "font_size": FONT_HEADER, "font_style": "Bold", "alignment": ui.Alignment.CENTER}
 
-    # ── Segmentation Dataset Setup ────────────────────────────────────────────
+    # ── 分割数据集设置 ─────────────────────────────────────────────────────────
     seg_cfg = config.get("semantic_segmentation", {})
     seg_enabled = bool(seg_cfg) and bool(seg_cfg.get("enabled", True))
     seg_rgb_annot = None
@@ -2020,7 +1996,7 @@ def main():
 
             seg_id_keywords  = {int(k): v for k, v in seg_cfg.get("id_keywords", {}).items()}
             seg_color_map    = {int(k): tuple(v) for k, v in seg_cfg.get("color_map", {}).items()}
-            # capture_frequency is in Hz; convert to a frame interval
+            # capture_frequency 的单位为 Hz，将其转换为帧间隔
             seg_capture_freq = max(1, int(app_freq / max(1, float(seg_cfg.get("capture_frequency", 1)))))
             _seg_res         = seg_cfg.get("image_resolution", [1280, 720])
             seg_images_dir   = os.path.join(repo_root, seg_cfg.get("images_dir", "data/segmentation/images"))
@@ -2033,7 +2009,7 @@ def main():
                 os.makedirs(seg_gt_masks_dir, mode=0o777, exist_ok=True)
             finally:
                 os.umask(_old_umask)
-            # chmod every intermediate dir from the leaf up to (not including) repo_root
+            # 从叶目录向上，对每个中间目录执行 chmod，但不包括 repo_root
             for _leaf in [seg_images_dir, seg_gt_masks_dir]:
                 _d = _leaf
                 while _d and _d != repo_root:
@@ -2046,14 +2022,14 @@ def main():
                         break
                     _d = _parent
 
-            # Identify the default (catch-all) label ID
+            # 确定默认（兜底）标签 ID
             for _id, _kws in seg_id_keywords.items():
                 if "default" in _kws:
                     seg_default_id = _id
                     break
 
-            # Assign semantic labels to Mesh prims only (skipping joints, physics prims,
-            # OmniGraph nodes, etc. to avoid corrupting non-visual stage elements).
+            # 仅为 Mesh Prim 分配语义标签；跳过关节、物理 Prim、OmniGraph 节点等，
+            # 以免破坏非可视 Stage 元素。
             def _assign_semantic_label(prim, label_str):
                 try:
                     from omni.isaac.core.utils.semantics import add_update_semantics
@@ -2074,8 +2050,7 @@ def main():
             for _prim in _seg_stage.Traverse():
                 if not _prim.IsValid() or _prim.GetTypeName() != "Mesh":
                     continue
-                # Only label environment prims — never touch vehicle prims to avoid
-                # corrupting vehicle mesh visibility / render state.
+                # 只标注环境 Prim，绝不修改车辆 Prim，以免破坏车辆网格可见性或渲染状态。
                 if not _prim.GetPath().pathString.startswith("/World/Environment"):
                     continue
                 _name_lower = _prim.GetName().lower()
@@ -2093,10 +2068,9 @@ def main():
                 _labeled += 1
             print(f"[Segmentation] Assigned semantic labels to {_labeled} Mesh prims.")
 
-            # Find the RGB camera under /World/Ego_Vehicle.
-            # If camera_prim is set in the config, find the first camera whose
-            # path ends with that value. Otherwise prefer "color"/"rgb" cameras,
-            # falling back to any non-depth camera.
+            # 在 /World/Ego_Vehicle 下查找 RGB 相机。若配置中设置了 camera_prim，
+            # 则查找路径以该值结尾的第一台相机；否则优先选择名称包含 "color"/"rgb"
+            # 的相机，并以任意非深度相机作为后备。
             _seg_cam_prim  = seg_cfg.get("camera_prim", None)
             _ego_cam_path  = None
             _ego_cam_fallback = None
@@ -2111,12 +2085,12 @@ def main():
                     continue
                 _cam_name_lower = _prim.GetName().lower()
                 if "depth" in _cam_name_lower:
-                    continue  # skip depth cameras
+                    continue  # 跳过深度相机
                 if "color" in _cam_name_lower or "rgb" in _cam_name_lower:
                     _ego_cam_path = _ps
-                    break  # best match
+                    break  # 最佳匹配
                 if _ego_cam_fallback is None:
-                    _ego_cam_fallback = _ps  # any non-depth camera as fallback
+                    _ego_cam_fallback = _ps  # 以后备方式选择任意非深度相机
             if _ego_cam_path is None:
                 _ego_cam_path = _ego_cam_fallback
 
@@ -2144,9 +2118,9 @@ def main():
             seg_enabled = False
 
     def _rviz_reset():
-        """Trigger RViz2's File > Reset if RViz2 is open, via xdotool.
-        Clears RViz2's internal TF buffer so stale frames from before a sim
-        restart don't cause TF_OLD_DATA warnings after the bridge is restarted.
+        """如果 RViz2 已打开，则通过 xdotool 触发“文件 > 重置”。
+        清除 RViz2 内部 TF 缓存，避免仿真重启前的陈旧坐标系在桥接程序重启后
+        引发 TF_OLD_DATA 警告。
         """
         import os as _rv_os, shutil as _rv_sh, subprocess as _rv_sp, time as _rv_t
         try:
@@ -2177,7 +2151,7 @@ def main():
         except Exception:
             pass
 
-    # ── Simulation Loop ───────────────────────────────────────────────────────
+    # ── 仿真循环 ───────────────────────────────────────────────────────────────
     ts = config.get("keyboard_control_settings", {})
     MAX_SPEED = float(ts.get("max_speed_m_s", 15.0))
     MAX_STEER = float(ts.get("max_steer_rad", 0.52))
@@ -2194,10 +2168,9 @@ def main():
     input_iface = carb.input.acquire_input_interface()
     keyboard = None
 
-    # Kit binds SPACE to the toolbar's Play/Pause action.  A raw keyboard-event
-    # callback is too late to override that hotkey, so remove the toolbar action
-    # from Kit's *in-process* hotkey registry instead.  This has no effect on
-    # the Timeline UI buttons or on the user's persistent hotkey settings.
+    # Kit 将空格键绑定到工具栏的播放/暂停操作。原始键盘事件回调执行得太晚，
+    # 无法覆盖该快捷键，因此从 Kit 的进程内快捷键注册表中移除工具栏操作。
+    # 这不会影响时间线 UI 按钮，也不会修改用户持久化的快捷键设置。
     try:
         import omni.kit.hotkeys.core as _hotkeys_core
 
@@ -2219,14 +2192,14 @@ def main():
         print(f"[Input] Could not unregister Timeline Space hotkey: {_space_hotkey_err}")
 
     iteration = 0
-    _restart_pending = False  # True for one frame while stop→play transition settles
-    _soft_restart_time = 0.0  # sim clock value at the moment of last restart trigger
-    _ui_setup_done = False    # One-time viewport/panel setup after first follow-cam init
-    _dock_vp2_iteration = -1  # Defers viewport docking by a few frames to ensure UI readiness
-    _rt_sim_dt = 1.0 / float(app_freq)  # simulated seconds per tick
-    _rt_wall_last = time.monotonic()   # wall time at last RT% sample (interval-based)
-    _rt_iter_last = 0                  # iteration count at last RT% sample
-    _ctrl_mode_last_pub = 0.0  # wall-clock time of last periodic control_mode publish
+    _restart_pending = False  # stop→play 过渡稳定期间有一帧为 True
+    _soft_restart_time = 0.0  # 上次触发重启时的仿真时钟值
+    _ui_setup_done = False    # 首次跟随相机初始化后执行一次视口/面板设置
+    _dock_vp2_iteration = -1  # 延迟数帧停靠视口，确保 UI 已就绪
+    _rt_sim_dt = 1.0 / float(app_freq)  # 每个 Tick 的仿真秒数
+    _rt_wall_last = time.monotonic()   # 上次实时因子采样时的墙上时间（按区间计算）
+    _rt_iter_last = 0                  # 上次实时因子采样时的迭代次数
+    _ctrl_mode_last_pub = 0.0  # 上次周期性发布 control_mode 的墙上时间
 
     if headless_mode:
         _veh_names = list(veh_ctrl_mode.keys())
@@ -2234,16 +2207,15 @@ def main():
         print(f"[Headless] Subscribe to drive commands via /ego/drive (AckermannDriveStamped) or /ego/control (autoware_control_msgs/Control)")
     print(f"\n[Simulator] Entering Main Loop ({app_freq}Hz)...")
 
-    # Pre-import hot-path modules once so per-tick lookups hit the cache cheaply.
+    # 预先导入热点路径模块，使每个 Tick 的查找都能低成本命中缓存。
     from omni.usd import get_world_transform_matrix as _get_wtm
     from pxr import Gf, UsdGeom
-    _FC_UP = Gf.Vec3d(0, 0, 1)          # constant up-vector for follow-camera math
-    def _avg(b): return sum(b) / len(b)  # smoothing helper for follow-camera buffers
-    _gnss_base_prims = {}  # veh_name -> cached Usd.Prim (avoids GetPrimAtPath every tick)
+    _FC_UP = Gf.Vec3d(0, 0, 1)          # 跟随相机计算使用的恒定上方向向量
+    def _avg(b): return sum(b) / len(b)  # 跟随相机缓冲区的平滑辅助函数
+    _gnss_base_prims = {}  # veh_name -> 缓存的 Usd.Prim，避免每 Tick 调用 GetPrimAtPath
 
-    # Keep this profiler intentionally lightweight: 
-    # it separates time spent in Kit/PhysX/OmniGraph from this launcher's Python work.
-    # This is the first split needed when RT is low but aggregate CPU/GPU utilisation is also low.
+    # 刻意保持此分析器轻量：它将 Kit/PhysX/OmniGraph 的耗时与本启动器的 Python
+    # 工作耗时分开。当实时因子较低、但 CPU/GPU 总体利用率也较低时，首先需要这种拆分。
     _profile_cfg = config.get("profiling", {})
     _profile_enabled = bool(_profile_cfg.get("enabled", True))
     _profile_interval_s = max(0.25, float(_profile_cfg.get("interval_s", 1.0)))
@@ -2260,7 +2232,7 @@ def main():
         _profile_after_update = time.perf_counter() if _profile_enabled else 0.0
         iteration += 1
 
-        # Publish control_mode status at 10 Hz (every 100 ms).
+        # 以 10 Hz（每 100 ms）发布 control_mode 状态。
         _now_wall = time.monotonic()
         if _ros_bridge_enabled and _drive_proc is not None and (_now_wall - _ctrl_mode_last_pub) >= 0.1:
             try:
@@ -2272,16 +2244,15 @@ def main():
             except Exception:
                 pass
 
-        # Deferred restart: play is called the frame *after* stop so that PhysX tensor
-        # views (odometry / IMU getVelocities) have fully torn down before OmniGraph
-        # nodes execute again.  Skip all OmniGraph reads this frame.
+        # 延迟重启：在 stop 后的下一帧才调用 play，确保 PhysX 张量视图
+        #（里程计/IMU getVelocities）在 OmniGraph 节点再次执行前已完全销毁。
+        # 本帧跳过所有 OmniGraph 读取。
         if _restart_pending:
-            # ── Restart ROS bridges ───────────────────────────────────────────
-            # Killing and respawning the bridge subprocesses gives both rclpy
-            # nodes a fresh TF buffer (cache_time = 2 s) with no stale entries
-            # from the previous run.  This is the definitive fix for the
-            # TF_OLD_DATA / LiDAR blackout: new rclpy node = new /tf publisher
-            # = Rviz resets its TF cache for that connection instantly.
+            # ── 重启 ROS 桥接程序 ─────────────────────────────────────────────
+            # 终止并重新生成桥接子进程，会让两个 rclpy 节点获得全新的 TF 缓存
+            #（cache_time = 2 s），其中不含上次运行的陈旧条目。这是解决
+            # TF_OLD_DATA/LiDAR 数据空窗的根本办法：新的 rclpy 节点意味着新的
+            # /tf 发布器，RViz 会立即重置该连接的 TF 缓存。
             if _ros_bridge_enabled and _drive_proc is not None:
                 try:
                     _drive_proc.stdin.close()
@@ -2342,7 +2313,7 @@ def main():
                 except Exception as _gnss_rerr:
                     print(f"[GNSS] GNSS bridge restart error: {_gnss_rerr}")
 
-            # ── Resume simulation ─────────────────────────────────────────────
+            # ── 恢复仿真 ─────────────────────────────────────────────────────
             _rviz_reset()
             timeline.set_current_time(_soft_restart_time + 3.0)
             timeline.play()
@@ -2354,11 +2325,10 @@ def main():
             print("[Sim] Simulation restarted.")
             continue
 
-        # ── Periodic frame-ID re-application ──────────────────────────────────
-        # OmniGraph nodes may reset authored attribute values to defaults after
-        # graph re-evaluation events.  Re-applying every 60 ticks (≈1 s at 60 Hz)
-        # keeps the TF publisher frame IDs namespaced so the TF chain
-        # ego/base_link → ego/odom → map stays intact in RViz.
+        # ── 周期性重新应用坐标系 ID ───────────────────────────────────────────
+        # 图重新求值后，OmniGraph 节点可能把已写入的属性值重置为默认值。
+        # 每 60 个 Tick（60 Hz 时约 1 秒）重新应用，可使 TF 发布器坐标系 ID
+        # 保持命名空间，从而让 ego/base_link → ego/odom → map TF 链在 RViz 中保持完整。
         if _og_frame_id_remaps and iteration % 60 == 1:
             for _fir_path, _fir_attr, _fir_val in _og_frame_id_remaps:
                 try:
@@ -2392,16 +2362,16 @@ def main():
             val_backspace = input_iface.get_keyboard_value(keyboard, K_BACKSPACE) if K_BACKSPACE else 0.0
             val_grave     = input_iface.get_keyboard_value(keyboard, K_GRAVE)     if K_GRAVE     else 0.0
 
-            # ` — switch to Perspective camera
+            # ` ——切换到透视相机
             if val_grave > 0.1 and not grave_pressed_last:
                 _set_viewport_camera("/OmniverseKit_Persp")
                 print("[Camera] Switched to Perspective")
             grave_pressed_last = (val_grave > 0.1)
 
-            # Backspace — restart simulation (stop now, play deferred one frame)
+            # 退格键——重启仿真（立即停止，延迟一帧后播放）
             if val_backspace > 0.1 and not backspace_pressed_last:
                 print("[Sim] Restarting simulation...")
-                _soft_restart_time = float(iteration) * _rt_sim_dt  # sim clock at stop
+                _soft_restart_time = float(iteration) * _rt_sim_dt  # 停止时的仿真时钟
                 timeline.stop()
                 current_speed = 0.0
                 current_steer = 0.0
@@ -2410,7 +2380,7 @@ def main():
                 _restart_pending = True
             backspace_pressed_last = (val_backspace > 0.1)
 
-            # 1 / 2 — short press: select vehicle; hold >1.5 s: toggle control mode
+            # 1 / 2——短按选择车辆；长按超过 1.5 秒切换控制模式
             _now = time.monotonic()
 
             if K_1:
@@ -2433,7 +2403,7 @@ def main():
                                 pass
                 else:
                     if key1_was_down and not key1_toggle_fired:
-                        # released before hold threshold — switch camera on release
+                        # 未达到长按阈值便松开——松开时切换相机
                         switch_selection("Ego_Vehicle")
                     key1_hold_start = None
                     key1_toggle_fired = False
@@ -2459,20 +2429,20 @@ def main():
                                 pass
                 else:
                     if key2_was_down and not key2_toggle_fired:
-                        # released before hold threshold — switch camera on release
+                        # 未达到长按阈值便松开——松开时切换相机
                         switch_selection("Opponent_Vehicle")
                     key2_hold_start = None
                     key2_toggle_fired = False
                 choice_keys_pressed_last[K_2] = key2_down
 
-            # HUD Toggle (toggles main + opponent windows together)
+            # HUD 开关（同时切换主窗口和对手车窗口）
             if val_slash > 0.1 and not slash_pressed_last:
                 _hud_vis = not hud_window.visible
                 for _hw in _hud_all_windows:
                     _hw.visible = _hud_vis
             slash_pressed_last = (val_slash > 0.1)
 
-            # R — toggle segmentation recording
+            # R——切换分割数据录制
             if val_r > 0.1 and not r_pressed_last:
                 is_recording = not is_recording
                 if is_recording:
@@ -2485,10 +2455,10 @@ def main():
                     print(f"\n[Record] Recording STOPPED — {seg_capture_index} frame(s) saved.")
             r_pressed_last = (val_r > 0.1)
         
-        # Teleop Logic
+        # 遥控逻辑
         f_dt = float(dt_teleop)
         if _split_active:
-            # Split-screen: WASD drives ego, arrow keys drive opponent independently.
+            # 分屏：WASD 驾驶自车，方向键独立驾驶对手车。
             pressed_throttle_ego = (val_w > 0.0 or val_s > 0.0 or val_space > 0.0)
             pressed_steer_ego    = (val_a > 0.0 or val_d > 0.0 or val_space > 0.0)
             pressed_throttle_opp = (val_up > 0.0 or val_down > 0.0 or val_space > 0.0)
@@ -2508,7 +2478,7 @@ def main():
             elif val_right > 0.0: opp_steer -= STEER_SPEED * f_dt
             if val_space > 0.0: opp_speed = opp_steer = 0.0
 
-            # Autocentering ego
+            # 自车自动回正
             if not pressed_throttle_ego:
                 if current_speed > 0.0: current_speed = max(0.0, current_speed - DECEL * f_dt)
                 elif current_speed < 0.0: current_speed = min(0.0, current_speed + DECEL * f_dt)
@@ -2518,7 +2488,7 @@ def main():
             current_speed = max(min(current_speed, MAX_SPEED), -MAX_SPEED)
             current_steer = max(min(current_steer, MAX_STEER), -MAX_STEER)
 
-            # Autocentering opponent
+            # 对手车自动回正
             if not pressed_throttle_opp:
                 if opp_speed > 0.0: opp_speed = max(0.0, opp_speed - DECEL * f_dt)
                 elif opp_speed < 0.0: opp_speed = min(0.0, opp_speed + DECEL * f_dt)
@@ -2528,7 +2498,7 @@ def main():
             opp_speed = max(min(opp_speed, MAX_SPEED), -MAX_SPEED)
             opp_steer = max(min(opp_steer, MAX_STEER), -MAX_STEER)
         else:
-            # Single screen: WASD and arrow keys both drive the selected vehicle.
+            # 单屏：WASD 和方向键都用于驾驶当前选中的车辆。
             pressed_throttle = (val_w > 0.0 or val_up > 0.0 or val_s > 0.0 or val_down > 0.0 or val_space > 0.0)
             pressed_steer = (val_a > 0.0 or val_left > 0.0 or val_d > 0.0 or val_right > 0.0 or val_space > 0.0)
             if val_w > 0.0 or val_up > 0.0:    current_speed += ACCEL * f_dt
@@ -2537,7 +2507,7 @@ def main():
             elif val_d > 0.0 or val_right > 0.0: current_steer -= STEER_SPEED * f_dt
             if val_space > 0.0: current_speed = current_steer = 0.0
 
-            # Autocentering
+            # 自动回正
             if not pressed_throttle:
                 if current_speed > 0.0: current_speed = max(0.0, current_speed - DECEL * f_dt)
                 elif current_speed < 0.0: current_speed = min(0.0, current_speed + DECEL * f_dt)
@@ -2547,16 +2517,15 @@ def main():
             current_speed = max(min(current_speed, MAX_SPEED), -MAX_SPEED)
             current_steer = max(min(current_steer, MAX_STEER), -MAX_STEER)
         
-        # Drive commands arrive via _drive_reader background thread (drive_bridge.py subprocess).
+        # 驾驶指令通过 _drive_reader 后台线程到达（drive_bridge.py 子进程）。
 
-        # Apply Control — each vehicle has an explicit mode set by F1/F2 toggle.
-        # TELEOP: keyboard drives the selected vehicle; non-selected vehicle is idle.
-        # ROS2:   external ROS 2 command drives the vehicle; keyboard is ignored.
-        #         Display reads back the OmniGraph controller state so it reflects
-        #         whatever the vehicle's built-in ROS2 subscriber applied, not just
-        #         what our rclpy bridge received.
+        # 应用控制——每辆车都有通过 F1/F2 切换的显式模式。
+        # TELEOP：键盘驾驶选中的车辆，未选车辆保持空闲。
+        # ROS2：由外部 ROS 2 指令驾驶车辆，忽略键盘输入。
+        #       显示内容回读 OmniGraph 控制器状态，因此反映车辆内置 ROS 2 订阅器
+        #       实际应用的值，而不只是 rclpy 桥接程序收到的值。
         def _read_og_ctrl(meta):
-            """Read speed/steer directly from the OmniGraph AckermannController inputs."""
+            """直接从 OmniGraph AckermannController 输入读取速度和转向值。"""
             try:
                 _rs = og.Controller.get(og.Controller.attribute(meta["ctrl_attr_speed"]))
                 _ra = og.Controller.get(og.Controller.attribute(meta["ctrl_attr_steer"]))
@@ -2565,19 +2534,18 @@ def main():
             except Exception:
                 return (0.0, 0.0)
 
-        # ── Lazy subscriber-tick discovery ───────────────────────────────────────
-        # The opponent vehicle's OmniGraph may not be fully registered in the OG
-        # runtime at startup, so og.get_node_by_path() returns invalid nodes and
-        # USD GetConnections() may return nothing for the subscriber's execIn.
-        # Re-attempt for the first 300 frames so the tick path is found once the
-        # graph is fully initialised, then immediately apply TELEOP gating.
+        # ── 延迟查找订阅器 Tick ────────────────────────────────────────────────
+        # 启动时，对手车的 OmniGraph 可能尚未完整注册到 OG 运行时，导致
+        # og.get_node_by_path() 返回无效节点，并且 USD GetConnections() 可能无法
+        # 返回订阅器 execIn 的连接。前 300 帧内持续重试，待图完全初始化后找到
+        # Tick 路径，并立即应用 TELEOP 门控。
         if iteration < 300:
             for _lz_name, _lz_meta in vehicle_teleop_publishers.items():
                 if _lz_meta.get("sub_tick_path"):
-                    continue  # already found
+                    continue  # 已找到
                 _lz_sub = _lz_meta.get("sub_node_path", "")
                 if not _lz_sub:
-                    # Also retry finding the subscriber node itself
+                    # 同时重试查找订阅器节点本身
                     for _lz_prim in stage.Traverse():
                         _lz_pp = _lz_prim.GetPath().pathString
                         if not _lz_pp.startswith(f"/World/{_lz_name}"): continue
@@ -2599,7 +2567,7 @@ def main():
                             _pub_routed_mode.pop(_lz_name, None)
                             break
                 if _lz_sub:
-                    # Try to find the driving tick via USD connection on inputs:execIn
+                    # 尝试通过 inputs:execIn 上的 USD 连接查找驱动 Tick
                     try:
                         _lz_sp = stage.GetPrimAtPath(_lz_sub)
                         _lz_ei = _lz_sp.GetAttribute("inputs:execIn")
@@ -2612,7 +2580,7 @@ def main():
                                     if any(k in _lz_tnt for k in ("OnPlaybackTick", "OnTick", "SimulationGate", "IsaacSimulationGate")):
                                         _lz_meta["sub_tick_path"] = str(_lz_pp2)
                                         print(f"\n[Teleop] Lazy: found sub_tick for {_lz_name}: {_lz_pp2}")
-                                        # Immediately disable if currently in TELEOP
+                                        # 如果当前处于 TELEOP 模式则立即禁用
                                         if veh_ctrl_mode.get(_lz_name, "KEYBOARD_CONTROL") == "KEYBOARD_CONTROL":
                                             try:
                                                 og.Controller.set(og.Controller.attribute(f"{_lz_pp2}.inputs:enabled"), False)
@@ -2622,7 +2590,7 @@ def main():
                                         break
                     except Exception: pass
 
-        # Keyboard routing: WASD → VP1 vehicle, arrows → VP2 vehicle.
+        # 键盘路由：WASD → VP1 车辆，方向键 → VP2 车辆。
         if _split_active:
             _kbd_vp1_veh = _vp1_showing
             _kbd_vp2_veh = _vp2_showing
@@ -2630,11 +2598,11 @@ def main():
             _kbd_vp1_veh = selected_vehicle_name
             _kbd_vp2_veh = selected_vehicle_name
 
-        _hud_cmds = {}  # veh_name -> (speed, steer) actually applied this tick
+        _hud_cmds = {}  # veh_name -> 本 Tick 实际应用的 (speed, steer)
         for _ctrl_veh, _meta in vehicle_teleop_publishers.items():
             _mode = veh_ctrl_mode.get(_ctrl_veh, "KEYBOARD_CONTROL")
             _just_switched_to_ros2 = False
-            # In TELEOP mode the ROS2 bridge is never consulted — only keyboard runs.
+            # TELEOP 模式下完全不查询 ROS 2 桥接程序，只处理键盘输入。
             if _mode == "ROS2_CONTROL":
                 _drv = _drive_cmds.get(_ctrl_veh)
                 _ext = _drv if (_drv and (time.monotonic() - float(_drv["stamp"])) < ros2_cmd_timeout_s) else None
@@ -2655,34 +2623,32 @@ def main():
                             _apply_speed, _apply_steer = 0.0, 0.0
                     else:
                         _apply_speed, _apply_steer = current_speed, current_steer
-                else:  # ROS2 mode
+                else:  # ROS2 模式
                     if _ext is not None:
                         _apply_speed, _apply_steer = _ext["speed"], _ext["steer"]
                     else:
-                        # Bridge has no fresh command — read the actual OmniGraph
-                        # controller state so the display reflects the command applied
-                        # by the vehicle's built-in ROS2 subscriber (if present).
+                        # 桥接程序没有新指令——读取实际 OmniGraph 控制器状态，
+                        # 使显示内容反映车辆内置 ROS 2 订阅器（若存在）所应用的指令。
                         _apply_speed, _apply_steer = _read_og_ctrl(_meta)
             else:
-                # Reroute subscriber/publisher topics on mode change (non-selected vehicle).
-                # Must happen BEFORE continue so TELEOP mode mutes external ROS2 commands.
+                # 模式变化时重路由订阅器/发布器话题（未选中的车辆）。
+                # 必须在 continue 前完成，使 TELEOP 模式能够屏蔽外部 ROS 2 指令。
                 if _pub_routed_mode.get(_ctrl_veh) != _mode:
                     _new_pub    = _meta["drive_topic"] if _mode == "KEYBOARD_CONTROL" else _meta["monitor_topic"]
                     _new_sub    = _meta["muted_topic"]
-                    # Update guard unconditionally so rerouting never fires again even if
-                    # the og.Controller.set() calls below raise an exception.
+                    # 无条件更新保护状态；即使下方 og.Controller.set() 调用抛出异常，
+                    # 也不会再次触发重路由。
                     _pub_routed_mode[_ctrl_veh] = _mode
                     if _mode == "ROS2_CONTROL":
                         _just_switched_to_ros2 = True
                     try:
                         og.Controller.set(og.Controller.attribute(_meta["pub_topic_attr"]), _new_pub)
-                        # Always keep the subscriber tick disabled regardless of mode.
-                        # The physics loop drives the controller via og.Controller.set()
-                        # every tick from the _drive_cmds cache.  Enabling the subscriber
-                        # tick in ROS2 mode caused the SubscribeAckermannDrive node to
-                        # reset controller inputs to 0 on every tick without a new message
-                        # (i.e. 5 out of 6 ticks at 60 Hz when the controller sends at 10 Hz),
-                        # overriding og.Controller.set() authored values.
+                        # 无论处于何种模式，都始终禁用订阅器 Tick。物理循环每个 Tick
+                        # 都会通过 og.Controller.set() 使用 _drive_cmds 缓存驱动控制器。
+                        # 在 ROS2 模式启用订阅器 Tick 会导致 SubscribeAckermannDrive 节点
+                        # 在没有新消息的每个 Tick 将控制器输入重置为 0（控制器以 10 Hz
+                        # 发送、仿真为 60 Hz 时，即每 6 个 Tick 中有 5 个），从而覆盖
+                        # og.Controller.set() 写入的值。
                         if _meta.get("sub_node_path"):
                             try:
                                 og.Controller.set(og.Controller.attribute(f"{_meta['sub_node_path']}.inputs:enabled"), False)
@@ -2701,8 +2667,8 @@ def main():
                     except Exception as _rr_e:
                         print(f"\n[Teleop] {_ctrl_veh}: failed to reroute: {_rr_e}")
                 if _mode == "KEYBOARD_CONTROL":
-                    # Must fall through to og.Controller.set() every tick to override
-                    # any stale subscriber ROS2 values on the controller.
+                    # 每个 Tick 都必须继续执行到 og.Controller.set()，
+                    # 以覆盖控制器上任何陈旧的订阅器 ROS 2 值。
                     if _ctrl_veh == _kbd_vp1_veh and _ctrl_veh == _kbd_vp2_veh:
                         _ks = current_speed if abs(current_speed) >= abs(opp_speed) else opp_speed
                         _kstr = current_steer if abs(current_steer) >= abs(opp_steer) else opp_steer
@@ -2719,11 +2685,11 @@ def main():
                     _apply_speed, _apply_steer = _read_og_ctrl(_meta)
             _hud_cmds[_ctrl_veh] = (_apply_speed, _apply_steer)
 
-            # Reroute publisher topic on mode change; subscriber always stays disabled.
+            # 模式变化时重路由发布器话题；订阅器始终保持禁用。
             if _pub_routed_mode.get(_ctrl_veh) != _mode:
                 _new_pub = _meta["drive_topic"] if _mode == "KEYBOARD_CONTROL" else _meta["monitor_topic"]
-                # Update guard unconditionally so rerouting never fires again even if
-                # the og.Controller.set() calls below raise an exception.
+                # 无条件更新保护状态；即使下方 og.Controller.set() 调用抛出异常，
+                # 也不会再次触发重路由。
                 _pub_routed_mode[_ctrl_veh] = _mode
                 if _mode == "ROS2_CONTROL":
                     _just_switched_to_ros2 = True
@@ -2747,11 +2713,11 @@ def main():
 
             try:
                 if _mode == "KEYBOARD_CONTROL":
-                    # TELEOP: drive the controller from keyboard and publish for observability.
+                    # TELEOP：使用键盘驱动控制器，并发布数据以便观察。
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_speed"]), _apply_speed)
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_steer"]), _apply_steer)
                 elif _just_switched_to_ros2:
-                    # One-shot reset on mode switch: clear the latched keyboard command.
+                    # 模式切换时执行一次性复位：清除锁存的键盘指令。
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_speed"]), 0.0)
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_steer"]), 0.0)
                     _sub_np = _meta.get("sub_node_path")
@@ -2761,12 +2727,10 @@ def main():
                         try: og.Controller.set(og.Controller.attribute(f"{_sub_np}.outputs:steeringAngle"), 0.0)
                         except Exception: pass
                 elif _ext is not None:
-                    # ROS2 mode with a fresh command: apply it.
-                    # Write to the controller inputs (works when sub→ctrl connections
-                    # are absent or have been disconnected) AND to the subscriber's
-                    # output attributes (ensures any un-disconnected sub→ctrl
-                    # connections carry our values, since the subscriber tick is
-                    # disabled and its compute function won't overwrite them).
+                    # ROS2 模式下收到新指令：应用该指令。同时写入控制器输入
+                    #（订阅器→控制器连接不存在或已断开时有效）和订阅器输出属性；
+                    # 这样任何尚未断开的订阅器→控制器连接也会携带我们的值，因为订阅器
+                    # Tick 已禁用，其计算函数不会覆盖这些值。
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_speed"]), _ext["speed"])
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_steer"]), _ext["steer"])
                     _sub_np = _meta.get("sub_node_path")
@@ -2776,7 +2740,7 @@ def main():
                         try: og.Controller.set(og.Controller.attribute(f"{_sub_np}.outputs:steeringAngle"), float(_ext["steer"]))
                         except Exception: pass
                 else:
-                    # ROS2 mode, no command received within ros2_cmd_timeout_s: safety stop.
+                    # ROS2 模式下在 ros2_cmd_timeout_s 内未收到指令：安全停车。
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_speed"]), 0.0)
                     og.Controller.set(og.Controller.attribute(_meta["ctrl_attr_steer"]), 0.0)
                     _sub_np = _meta.get("sub_node_path")
@@ -2786,15 +2750,15 @@ def main():
                         try: og.Controller.set(og.Controller.attribute(f"{_sub_np}.outputs:steeringAngle"), 0.0)
                         except Exception: pass
                 
-                # Unconditionally sync the observability publisher node with the current physical actuals
-                # to prevent an untethered OmniGraph node from repeatedly blasting 0.0 into the ROS2 topic
+                # 无条件将观测发布器节点与当前物理实际值同步，防止未连接的 OmniGraph
+                # 节点反复向 ROS 2 话题发送 0.0。
                 _pub_p = _meta["pub_node_path"]
                 og.Controller.set(og.Controller.attribute(f"{_pub_p}.inputs:speed"), float(_apply_speed))
                 og.Controller.set(og.Controller.attribute(f"{_pub_p}.inputs:steeringAngle"), float(_apply_steer))
             except Exception: pass
 
 
-        # ── Terminal status: two in-place lines (ego + opponent) ──────────────
+        # ── 终端状态：原位显示两行（自车 + 对手车）────────────────────────────
         if iteration % max(1, app_freq // 10) == 0:
             _rt_now = time.monotonic()
             _rt_wall_dt = _rt_now - _rt_wall_last
@@ -2817,7 +2781,7 @@ def main():
                 sys.stdout.flush()
             _last_n_status_lines = len(_status_lines)
 
-        # Follow Cameras (skipped in headless mode — no viewport)
+        # 跟随相机（无头模式没有视口，因此跳过）
         if not headless_mode:
          for veh_name, cfg in veh_follow_configs.items():
             data = follow_cam_handles.get(veh_name)
@@ -2825,10 +2789,9 @@ def main():
                 from pxr import UsdGeom
                 base_prim = stage.GetPrimAtPath(cfg["base_path"])
                 if not base_prim.IsValid(): continue
-                # Camera lives at the world level, NOT under the chassis prim.
-                # Parenting to the chassis caused one-frame jitter: the physics engine
-                # updates the chassis world transform after we write the local transform,
-                # so the renderer briefly sees new_chassis × old_local each tick.
+                # 相机位于世界层级，而不在底盘 Prim 下。将其设为底盘的子节点会导致
+                # 单帧抖动：物理引擎在写入局部变换后才更新底盘世界变换，
+                # 因此渲染器在每个 Tick 会短暂看到 new_chassis × old_local。
                 fc_path = f"/World/{cfg['cam_name']}"
                 cam_p = stage.GetPrimAtPath(fc_path)
                 if not cam_p.IsValid():
@@ -2845,8 +2808,8 @@ def main():
                     "buf_y":  collections.deque(maxlen=40),
                     "buf_z":  collections.deque(maxlen=40),
                     "buf_lz": collections.deque(maxlen=40),
-                    # Rotation smoothing: forward-vector components averaged over ~24 frames
-                    # to eliminate orientation jitter while still tracking turns
+                    # 旋转平滑：对约 24 帧的前向向量分量求平均，
+                    # 在跟踪转向的同时消除方向抖动
                     "buf_fx": collections.deque(maxlen=24),
                     "buf_fy": collections.deque(maxlen=24),
                     "buf_fz": collections.deque(maxlen=24),
@@ -2857,21 +2820,19 @@ def main():
                 m = _get_wtm(data["base"])
                 pos = m.ExtractTranslation()
                 rot = m.ExtractRotationMatrix()
-                # Derive forward from the chassis rotation matrix only.
-                # Using front/rear prim world positions caused vibration when the
-                # front wheel steered: the front prim is parented to steering geometry
-                # so its world position shifts even when the vehicle body is stationary.
+                # 仅根据底盘旋转矩阵推导前向。使用前后 Prim 的世界位置会在前轮转向时
+                # 引发振动：前部 Prim 是转向几何体的子节点，因此即使车身静止，
+                # 它的世界位置也会发生偏移。
                 raw_fwd = rot.GetRow(0)
-                # ExtractRotationMatrix() does not always return unit rows — the row
-                # magnitude equals the prim's world scale factor. Normalize so the
-                # smoothing buffers contain unit vectors regardless of vehicle scale.
+                # ExtractRotationMatrix() 并不总是返回单位行向量——行向量长度等于 Prim
+                # 的世界缩放因子。进行归一化，使平滑缓冲区无论车辆缩放如何都保存单位向量。
                 _rf_len = raw_fwd.GetLength()
                 if _rf_len > 1e-6: raw_fwd = raw_fwd / _rf_len
-                # Smooth position
+                # 平滑位置
                 data["buf_x"].append(pos[0]); data["buf_y"].append(pos[1])
                 data["buf_z"].append(pos[2] + data["height"])
                 data["buf_lz"].append(pos[2] + data["focus_height"])
-                # Smooth forward vector components to eliminate rotation jitter
+                # 平滑前向向量分量以消除旋转抖动
                 data["buf_fx"].append(raw_fwd[0])
                 data["buf_fy"].append(raw_fwd[1])
                 data["buf_fz"].append(raw_fwd[2])
@@ -2885,8 +2846,8 @@ def main():
                 cam_pos_world = Gf.Vec3d(xy_base[0], xy_base[1], sz)
                 lookat_pos = Gf.Vec3d(sx, sy, slz)
                 lookat_m_world = Gf.Matrix4d().SetLookAt(cam_pos_world, lookat_pos, _FC_UP)
-                # Camera is at world level so its local transform IS its world transform —
-                # no parent inverse needed (and no chassis physics jitter contamination).
+                # 相机位于世界层级，因此其局部变换就是世界变换——无需父节点逆变换，
+                # 也不会受到底盘物理抖动的影响。
                 local_m = lookat_m_world.GetInverse()
                 xformable = UsdGeom.Xformable(data["cam"])
                 x_attr = data.get("x_attr") or xformable.GetPrim().GetAttribute("xformOp:transform")
@@ -2898,22 +2859,22 @@ def main():
                     data["x_attr"] = x_attr
             except Exception: pass
 
-        # ── One-time UI setup (viewport camera, split-screen, panel hiding) ───
-        # Deferred until after the first follow-camera tick so USD camera prims exist.
+        # ── 一次性 UI 设置（视口相机、分屏、隐藏面板）─────────────────────────
+        # 延迟到第一次跟随相机 Tick 后执行，确保 USD 相机 Prim 已存在。
         if not headless_mode and not _ui_setup_done and follow_cam_handles:
             _ui_setup_done = True
-            # Set ego follow camera as the default viewport camera
+            # 将自车跟随相机设为默认视口相机
             if "Ego_Vehicle" in veh_follow_configs:
                 _set_viewport_camera(f"/World/{veh_follow_configs['Ego_Vehicle']['cam_name']}")
 
-            # Split-screen: create Viewport 2 and point it at the opponent camera
+            # 分屏：创建视口 2，并将其指向对手车相机
             if _ui_split_screen and len(enabled_vehicles) >= 2 and "Opponent_Vehicle" in veh_follow_configs:
                 try:
                     from omni.kit.viewport.utility import create_viewport_window as _cvw
                     import omni.ui as _ui2
                     _vp2_win = _cvw("Viewport 2")
                     if _vp2_win is not None:
-                        _dock_vp2_iteration = iteration + 2  # Dock 2 frames from now
+                        _dock_vp2_iteration = iteration + 2  # 再过 2 帧执行停靠
                         _opp_cam_p = f"/World/{veh_follow_configs['Opponent_Vehicle']['cam_name']}"
                         if hasattr(_vp2_win, "viewport_api"):
                             _vp2_api = _vp2_win.viewport_api
@@ -2932,19 +2893,18 @@ def main():
                 if _vp_win and _vp2_win_o:
                     _vp2_win_o.dock_in(_vp_win, _ui2.DockPosition.RIGHT, 0.5)
                     print(f"[UI] Split-screen: Viewport 2 docked successfully at iter {iteration}.")
-                    _dock_vp2_iteration = -1  # Success, stop trying
+                    _dock_vp2_iteration = -1  # 设置成功，停止重试
                 elif iteration > _dock_vp2_iteration + 60:
                     print("[UI] Split-screen: Viewport dock timeout (windows not found).")
-                    _dock_vp2_iteration = -1  # Timeout
+                    _dock_vp2_iteration = -1  # 已超时
             except Exception as e:
                 print(f"[UI] Split-screen dock setup error: {e}")
                 _dock_vp2_iteration = -1
 
-        # ── GNSS Publish ──────────────────────────────────────────────────────
-        # Runs at _gnss_frame_skip intervals (e.g. every 12 frames at 120 Hz → 10 Hz).
-        # Reads the chassis world transform, applies equirectangular projection from
-        # the configured map origin to produce WGS-84 lat/lon/alt, adds Gaussian
-        # noise, then publishes sensor_msgs/NavSatFix.
+        # ── GNSS 发布 ─────────────────────────────────────────────────────────
+        # 按 _gnss_frame_skip 间隔运行，例如 120 Hz 下每 12 帧执行一次即为 10 Hz。
+        # 读取底盘世界变换，以配置的地图原点为基准应用等距圆柱投影，生成 WGS-84
+        # 经度、纬度和高度，加入高斯噪声后发布 sensor_msgs/NavSatFix。
         if _gnss_enabled and _gnss_publishers and (iteration % _gnss_frame_skip == 0):
             _gnss_stamp_ns = _gnss_time.time_ns()
             for _gvn, _gpub_info in _gnss_publishers.items():
@@ -2960,19 +2920,19 @@ def main():
                     _gp = _get_wtm(_gbase).ExtractTranslation()
                     _gx, _gy, _gz = float(_gp[0]), float(_gp[1]), float(_gp[2])
 
-                    # Equirectangular: sim +X = East (lon), sim +Y = North (lat)
+                    # 等距圆柱投影：仿真 +X = 东（经度），仿真 +Y = 北（纬度）
                     _lat = _gnss_lat0 + _gnss_math.degrees(_gy / _R_EARTH)
                     _lon = _gnss_lon0 + _gnss_math.degrees(_gx / (_R_EARTH * _gnss_cos_lat0))
                     _alt = _gnss_alt0 + _gz
 
-                    # Add independent Gaussian noise on each axis
+                    # 在每个轴上加入相互独立的高斯噪声
                     _lat += _gnss_math.degrees(_gnss_random.gauss(0.0, _gnss_h_std) / _R_EARTH)
                     _lon += _gnss_math.degrees(_gnss_random.gauss(0.0, _gnss_h_std) / (_R_EARTH * _gnss_cos_lat0))
                     _alt += _gnss_random.gauss(0.0, _gnss_v_std)
 
                     _gnss_hud_data[_gvn] = (_lat, _lon)
 
-                    # Send to gnss_bridge.py subprocess via stdin pipe.
+                    # 通过标准输入管道发送给 gnss_bridge.py 子进程。
                     _gline = (f"{_gpub_info['topic']}\t{_gpub_info['frame_id']}\t"
                               f"{_lat}\t{_lon}\t{_alt}\t"
                               f"{_gnss_h_std}\t{_gnss_v_std}\t{_gnss_stamp_ns}\n")
@@ -2981,10 +2941,10 @@ def main():
                 except Exception:
                     pass
 
-        # Update HUD
+        # 更新 HUD
         if iteration % 4 == 0 and HUD_ENABLED:
             if _split_active and opp_hud_window is not None:
-                # VP1's HUD always sits on VP1; VP2's HUD always sits on VP2.
+                # VP1 的 HUD 始终位于 VP1，VP2 的 HUD 始终位于 VP2。
                 try:
                     import omni.ui as _ui_hud
                     _vp1_ui = _ui_hud.Workspace.get_window("Viewport")
@@ -2994,9 +2954,9 @@ def main():
                         opp_hud_window.position_x = _vp2_ui.position_x + 10
                 except Exception:
                     pass
-                # Each HUD window shows the vehicle currently in that viewport.
-                # hud_labels["Ego_Vehicle"] contains the widgets for hud_window (VP1).
-                # hud_labels["Opponent_Vehicle"] contains the widgets for opp_hud_window (VP2).
+                # 每个 HUD 窗口显示当前位于对应视口中的车辆。
+                # hud_labels["Ego_Vehicle"] 包含 hud_window（VP1）的控件；
+                # hud_labels["Opponent_Vehicle"] 包含 opp_hud_window（VP2）的控件。
                 for _hud_veh, v_models in [
                     (_vp1_showing, hud_labels.get("Ego_Vehicle", {})),
                     (_vp2_showing, hud_labels.get("Opponent_Vehicle", {})),
@@ -3085,16 +3045,16 @@ def main():
                             v_models["gnss_lat"].text = f"{_gd[0]:.6f}°"
                             v_models["gnss_lon"].text = f"{_gd[1]:.6f}°"
 
-        # ── Segmentation Capture ──────────────────────────────────────────────
+        # ── 分割数据采集 ─────────────────────────────────────────────────────
         if is_recording and seg_enabled and seg_rgb_annot and seg_mask_annot:
             if iteration % seg_capture_freq == 0:
                 try:
-                    # annotators pull the latest buffer directly — no orchestrator step needed.
+                    # 标注器会直接提取最新缓冲区，无需执行 Orchestrator 步骤。
                     _rgb_data = seg_rgb_annot.get_data()
                     _seg_data = seg_mask_annot.get_data()
 
                     if _rgb_data is not None and _seg_data is not None:
-                        # Determine output file number
+                        # 确定输出文件编号
                         if seg_overwrite:
                             _file_num = seg_capture_index
                         else:
@@ -3108,21 +3068,21 @@ def main():
                         _img_path  = os.path.join(seg_images_dir,   f"{_file_num:06d}.png")
                         _mask_path = os.path.join(seg_gt_masks_dir, f"{_file_num:06d}.png")
 
-                        # Save RGB image (drop alpha channel if present)
+                        # 保存 RGB 图像（若存在 Alpha 通道则将其丢弃）
                         _rgb_arr = _np.array(_rgb_data, dtype=_np.uint8)
                         if _rgb_arr.ndim == 3 and _rgb_arr.shape[2] == 4:
                             _rgb_arr = _rgb_arr[:, :, :3]
                         _PILImage.fromarray(_rgb_arr).save(_img_path)
                         os.chmod(_img_path, 0o666)
 
-                        # Build color mask from semantic segmentation data.
-                        # seg_data["data"]  : (H, W) uint32 array of replicator-internal IDs
-                        # seg_data["info"]["idToLabels"] : {rep_id_str -> {"class": "our_id_str"}}
+                        # 根据语义分割数据构建彩色掩码。
+                        # seg_data["data"]：形状为 (H, W) 的 Replicator 内部 ID uint32 数组
+                        # seg_data["info"]["idToLabels"]：{rep_id_str -> {"class": "our_id_str"}}
                         _seg_pixels   = _np.asarray(_seg_data.get("data", _np.zeros((1, 1), dtype=_np.uint32)))
                         _id_to_labels = _seg_data.get("info", {}).get("idToLabels", {})
                         _default_color = seg_color_map.get(seg_default_id, (0, 0, 0))
 
-                        if _seg_pixels.ndim == 3:          # (H, W, 4) packed RGBA id
+                        if _seg_pixels.ndim == 3:          # (H, W, 4) 打包 RGBA ID
                             _seg_pixels = _seg_pixels.view(_np.uint32).reshape(_seg_pixels.shape[:2])
 
                         _h, _w = _seg_pixels.shape[:2]
@@ -3170,9 +3130,8 @@ def main():
                     f"post avg/p95/max={_post_avg:.2f}/{_post_p95:.2f}/{_post_max:.2f} ms | "
                     f"update={_update_share:.0f}%"
                 )
-                # The terminal RT display rewrites its previous status lines
-                # using cursor-up escapes.  A profiler line is persistent
-                # output, so prevent the next status update from overwriting it.
+                # 终端实时因子显示使用光标上移转义序列重写之前的状态行。
+                # 分析器行是持久输出，因此要防止下一次状态更新覆盖它。
                 _last_n_status_lines = 0
                 _profile_window_start = _profile_tick_end
                 _profile_update_ms.clear()
