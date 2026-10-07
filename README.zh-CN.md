@@ -336,10 +336,26 @@ asset_manifest:
 
 相邻的 `truth/` 目录包含 `elevation.npy`、`slope_deg.npy`、全部六个区域掩码、ROS 兼容占用地图、作业区域 GeoJSON、语义标签、推荐生成位姿，以及种子/资产哈希清单。生成的场景输出会被 Git 有意忽略，并可根据版本化的 YAML 重新生成。
 
-无需打开 UI，即可使用同一个固定验证相机进行渲染：
+### 5.2 生成场景预览图
+
+生成并保存 USD 场景后，可以在容器内执行以下命令，使用固定的验证相机和分辨率生成预览图，无需打开 Isaac Sim UI：
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/render_lawn_preview.py --stage assets/environments/lawn_generated/offroad_lawn_01/root.usda --output assets/environments/lawn_generated/offroad_lawn_01/preview.png
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/render_lawn_preview.py \
+  --stage assets/environments/lawn_generated/offroad_lawn_01/root.usda \
+  --output assets/environments/lawn_generated/offroad_lawn_01/preview.png
+```
+
+其中，`--stage` 指定待渲染的 USD 场景，`--output` 指定 PNG 文件的保存位置。该命令只生成预览图片，不会修改或保存输入场景；预览图也不是仿真运行时依赖，可以按需重新生成或删除。默认输出分辨率为 `1280×720`，可通过 `--width` 和 `--height` 调整，例如：
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/render_lawn_preview.py \
+  --stage assets/environments/lawn_generated/offroad_lawn_01/root.usda \
+  --output assets/environments/lawn_generated/offroad_lawn_01/preview_1920x1080.png \
+  --width 1920 \
+  --height 1080
 ```
 
 使用 `--cycles 10` 执行所要求的生成/清理泄漏冒烟测试。执行完整验收测试时添加 `--validate-lifecycle`，该测试还会构造真实 UI 窗口，并验证扩展的禁用/重新启用。普通场景生成会跳过这一相对耗时的生命周期检查，并在 USD 和真值数据写入后立即退出。两种模式都会检查固定种子的高度场/对象数量，并验证没有生成 `PhysicsScene`。Python 依赖声明在 `extensions/lawn.terrain.generator/requirements.txt` 中，并由 Dockerfile 安装到 Isaac Sim 自带的 Python 中。
@@ -598,6 +614,73 @@ vehicles:
     enable_lidar: true
     enable_gnss: true
 ```
+
+### 10.1 导出车辆 URDF 模型
+
+当前项目使用的 `roboracer_max.usd` 和 `roboracer_offroad.usd` 是两个不同的车辆资产；即使同一资产在场景中存在多个车辆实例，也只需要导出一次。这两个 USD 包含 PhysX 闭环悬架，而标准 URDF 和 RViz2 只接受单根树结构。不要直接将 Isaac Sim 通用 URDF 导出器的原始结果加载到 RViz2；原始结果包含非标准 `loop_joint`、无限关节限制以及多个根 Link。
+
+项目提供 `scripts/tools/export_vehicle_rviz.py`，它从完整 USD Stage 计算最终可见几何、统一转换为米，并生成仅用于 RViz2 结构可视化的单 `base_link` URDF。输出目录会自动创建，无需提前执行 `mkdir`。由于命令在容器内运行、RViz2 在物理机运行，`--mesh-uri` 必须填写物理机可访问的绝对 `file://` 路径；如果项目不在下面的默认位置，请相应替换 `/home/ubuntu/workspaces/autoware-off-road_sim`。
+
+导出 `roboracer_max.usd`：
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/export_vehicle_rviz.py \
+  --usd-path assets/vehicles/roboracer_max.usd \
+  --output-dir assets/vehicles/rviz/roboracer_max \
+  --mesh-uri file:///home/ubuntu/workspaces/autoware-off-road_sim/assets/vehicles/rviz/roboracer_max/meshes/roboracer_max.obj
+```
+
+导出 `roboracer_offroad.usd`：
+
+```bash
+/root/isaacsim/_build/linux-x86_64/release/python.sh \
+  scripts/tools/export_vehicle_rviz.py \
+  --usd-path assets/vehicles/roboracer_offroad.usd \
+  --output-dir assets/vehicles/rviz/roboracer_offroad \
+  --mesh-uri file:///home/ubuntu/workspaces/autoware-off-road_sim/assets/vehicles/rviz/roboracer_offroad/meshes/roboracer_offroad.obj
+```
+
+导出后先验证 URDF：
+
+```bash
+check_urdf assets/vehicles/rviz/roboracer_max/roboracer_max.urdf
+check_urdf assets/vehicles/rviz/roboracer_offroad/roboracer_offroad.urdf
+```
+
+然后在 RViz2 的 `RobotModel` 中选择 `Description Source: File`，加载 `assets/vehicles/rviz/` 下对应的 `.urdf` 文件，不要加载 Isaac Sim 通用导出器生成在 `assets/vehicles/roboracer_max/` 或 `assets/vehicles/roboracer_offroad/` 下的原始 URDF。每个 RViz 输出目录包含一个 `.urdf` 文件以及 `meshes/` 下的 OBJ/MTL 文件。
+
+仿真发布的 TF Frame 带有车辆话题前缀，而导出的 URDF 根 Link 固定为 `base_link`。因此，在显示主车时应使用以下 RViz2 设置：
+
+```text
+Global Options > Fixed Frame: ego/base_link
+RobotModel > TF Prefix: ego
+```
+
+显示对手车时改为：
+
+```text
+Global Options > Fixed Frame: opponent/base_link
+RobotModel > TF Prefix: opponent
+```
+
+如果 TF 树中已经存在 `map -> ego/...` 和 `map -> opponent/...`，也可以统一把 `Fixed Frame` 设置为 `map`，但两个 `RobotModel` 仍须分别设置 `ego` 和 `opponent` 前缀。`Description Source: File` 只负责读取 URDF，不会自动为 `base_link` 添加命名空间；如果固定坐标系为 `ego/base_link` 而 `TF Prefix` 留空，就会出现 `No transform from [base_link] to [ego/base_link]`。
+
+导出器会去除 USD 资产在原场景中的出生平移，使车辆几何相对于自身 `base_link` 定位，避免在 RViz2 中叠加一次出生高度而看起来悬空；同时会将 USD 的基础颜色转换为 OBJ/MTL 材质。复杂的 MDL 材质和贴图不能完整转换，徽标等部分可能使用近似颜色。
+
+生成结果是固定姿态的可视化模型，不包含可运动关节、碰撞体和动力学参数；仿真仍然继续使用原始 USD。若需要可转动车轮或可动转向结构，则必须另外制作一份单树运动学 URDF，不能直接照搬 USD 中的闭环 PhysX 悬架。
+
+项目同时为两种车型提供了独立的 RViz2 配置，配置中已经绑定对应的 URDF、TF 前缀、视角目标和传感器话题：
+
+```bash
+# Ego_Vehicle：RoboRacer Max
+rviz2 -d assets/vehicles/rviz/roboracer_max/roboracer_max.rviz
+
+# Opponent_Vehicle：RoboRacer OffRoad
+rviz2 -d assets/vehicles/rviz/roboracer_offroad/roboracer_offroad.rviz
+```
+
+两份配置均使用 `map` 作为全局固定坐标系。OffRoad 配置默认关闭点云显示，因为当前 Opponent 配置中的 `enable_lidar` 为 `false`。
 
 ---
 

@@ -4,3 +4,7 @@ gnss_bridge.log
 *.pyc
 external_assets/
 assets/environments/lawn_generated/
+# RViz-ready URDF/mesh files are generated locally; keep the reusable .rviz
+# display configurations in version control.
+assets/vehicles/rviz/*/*.urdf
+assets/vehicles/rviz/*/meshes/

@@ -35,7 +35,7 @@ tf_settings:
   map_frame: "map"
 
 environment:
-  asset: "assets/environments/lawn_generated/residential_backyard_01/root.usda"
+  asset: "assets/environments/lawn_generated/offroad_lawn_02/root.usd"
   scale: [1.0, 1.0, 1.0]
   rotation_euler: [0.0, 0.0, 0.0]
   translation: [0.0, 0.0, 0.0]
@@ -66,8 +66,7 @@ vehicles:
       right:
         image: "right/image_raw"
         camera_info: "right/camera_info"
-    # root.usda 推荐点为 (-20, -17, -0.2673)，Z 额外抬高约 0.15 m 供车辆落地。
-    spawn_position: [-20.0, -17.0, -0.1173]
+    spawn_position: [-20.0, -17.0, 0.0]
     spawn_orientation: [0.0, 0.0, 0.0]
     enable_rgb: true
     enable_depth: true
@@ -121,7 +120,7 @@ vehicles:
       right:
         image: "right/image_raw"
         camera_info: "right/camera_info"
-    spawn_position: [-20.0, -17.0, -0.1173]
+    spawn_position: [-20.0, -17.0, 0.0]
     spawn_orientation: [0.0, 0.0, 0.0]
     enable_rgb: true
     enable_depth: true
