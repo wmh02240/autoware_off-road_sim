@@ -244,7 +244,7 @@ The same generator runs headlessly from YAML and does not require UI clicks:
 ```bash
 /root/isaacsim/_build/linux-x86_64/release/python.sh \
   scripts/tools/generate_lawn_scene.py \
-  --config scripts/configs/lawn_generator_stage2.yaml \
+  --config extensions/lawn.terrain.generator/config/presets/lawn_generator_stage2.yaml \
   --output /tmp/lawn_generator_stage2.usda
 ```
 
@@ -256,7 +256,7 @@ undergrowth and moss rocks. Generate it headlessly
 inside the existing container with:
 
 ```bash
-/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/generate_lawn_scene.py --config scripts/configs/lawn_generator_stage3_offroad.yaml --output assets/environments/lawn_generated/offroad_lawn_01/root.usda
+/root/isaacsim/_build/linux-x86_64/release/python.sh scripts/tools/generate_lawn_scene.py --config extensions/lawn.terrain.generator/config/presets/lawn_generator_stage3_offroad.yaml --output assets/environments/lawn_generated/offroad_lawn_01/root.usda
 ```
 
 The adjacent `truth/` directory contains `elevation.npy`, `slope_deg.npy`, all

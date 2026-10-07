@@ -39,9 +39,9 @@ class GeneratorWindow:
 
     def _default_config_path(self) -> Path:
         # Extension Manager may report the registration symlink under
-        # release/exts. Resolve it before deriving the repository root.
+        # release/exts. Resolve it so the bundled preset remains discoverable.
         extension_path = Path(self._extension_path).resolve()
-        return extension_path.parents[1] / "scripts/configs/lawn_generator_stage3_offroad.yaml"
+        return extension_path / "config/presets/lawn_generator_stage3_offroad.yaml"
 
     @staticmethod
     def _read_mapping(path: Path) -> dict:

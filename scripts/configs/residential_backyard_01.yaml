@@ -1,0 +1,223 @@
+# Residential backyard generated-scene configuration.
+physics_settings:
+  time_steps_per_second: 100
+  solver_position_iterations: 4
+  solver_velocity_iterations: 1
+
+graphics_settings:
+  render_resolution: [1920, 1080]
+  enable_DLSS_FPS_Multiplier_x2: false
+  disable_shadows: false
+  disable_ambient_occlusion: true
+  disable_reflections: true
+
+user_interface:
+  viewport_mode: false
+  default_control_mode: "KEYBOARD"
+  split_screen: false
+
+map_server:
+  enabled: false
+
+network_setup:
+  ros2_domain_id: 0
+  network_interface: "auto"
+  ros2_cmd_timeout_s: 3.0
+
+tf_settings:
+  namespace_links: true
+  semantic_frames: true
+  disable_builtin_transform_tree: true
+  wheel_tf_rate_hz: 30.0
+  publish_map_to_odom: true
+  zero_odom_at_start: true
+  odom_zeroing_duration_s: 1.0
+  map_frame: "map"
+
+environment:
+  asset: "assets/environments/lawn_generated/residential_backyard_01/root.usda"
+  scale: [1.0, 1.0, 1.0]
+  rotation_euler: [0.0, 0.0, 0.0]
+  translation: [0.0, 0.0, 0.0]
+  # 该生成场景没有固化灯光；启动器仅在 Stage 中不存在任何灯光时创建备用太阳光。
+  fallback_lighting:
+    enabled: true
+    intensity: 2200.0
+    angle_deg: 1.0
+    rotation_deg: [35.0, -25.0, 25.0]
+    color_temperature_k: 5500.0
+  frictions:
+    - name: "GroundMaterial"
+      dynamic_friction: 0.45
+      static_friction: 0.60
+    - name: "TirePhysicsMaterial"
+      dynamic_friction: 1.0
+      static_friction: 1.0
+
+vehicles:
+  - name: "Ego_Vehicle"
+    enabled: true
+    asset: "assets/vehicles/roboracer_max.usd"
+    topic_prefix: "/ego"
+    camera_topics:
+      left:
+        image: "left/image_raw"
+        camera_info: "left/camera_info"
+      right:
+        image: "right/image_raw"
+        camera_info: "right/camera_info"
+    # root.usda 推荐点为 (-20, -17, -0.2673)，Z 额外抬高约 0.15 m 供车辆落地。
+    spawn_position: [-20.0, -17.0, -0.1173]
+    spawn_orientation: [0.0, 0.0, 0.0]
+    enable_rgb: true
+    enable_depth: true
+    enable_camera_info: true
+    enable_stereo: true
+    enable_imu: true
+    enable_realsense_imu: true
+    enable_lidar: true
+    enable_gnss: true
+    enable_radar: false
+    gnss_mode: "simulated"
+    sensor_capabilities:
+      rgb: true
+      depth: true
+      camera_info: true
+      stereo: true
+      imu: true
+      realsense_imu: true
+      lidar: true
+      gnss: true
+      radar: false
+    ros_frames:
+      base_footprint: "base_footprint"
+      base_link: "base_link"
+      chassis: "chassis_link"
+      camera: "camera_color_frame"
+      camera_optical: "camera_color_optical_frame"
+      camera_left: "camera_left_frame"
+      camera_left_optical: "camera_left_optical_frame"
+      camera_right: "camera_right_frame"
+      camera_right_optical: "camera_right_optical_frame"
+      camera_depth: "camera_depth_frame"
+      camera_depth_optical: "camera_depth_optical_frame"
+      imu: "imu_link"
+      realsense_imu: "realsense_imu_link"
+      lidar: "lidar_link"
+      front_left_wheel: "front_left_wheel_link"
+      front_right_wheel: "front_right_wheel_link"
+      rear_left_wheel: "rear_left_wheel_link"
+      rear_right_wheel: "rear_right_wheel_link"
+
+  - name: "Opponent_Vehicle"
+    enabled: false
+    asset: "assets/vehicles/roboracer_offroad.usd"
+    topic_prefix: "/opponent"
+    camera_topics:
+      primary_side: "left"
+      left:
+        image: "left/image_raw"
+        camera_info: "left/camera_info"
+      right:
+        image: "right/image_raw"
+        camera_info: "right/camera_info"
+    spawn_position: [-20.0, -17.0, -0.1173]
+    spawn_orientation: [0.0, 0.0, 0.0]
+    enable_rgb: true
+    enable_depth: true
+    enable_camera_info: true
+    enable_stereo: true
+    enable_imu: true
+    enable_realsense_imu: false
+    enable_lidar: false
+    enable_gnss: true
+    enable_radar: false
+    gnss_mode: "simulated"
+    tf_extrinsics:
+      base_link_center_xy: [0.120745121, -0.000054712]
+      base_link_height: 0.049506704
+      frames:
+        chassis_link:
+          xyz: [0.0, 0.0, 0.0]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        front_left_wheel_link:
+          xyz: [0.120144182, 0.109708920, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        front_right_wheel_link:
+          xyz: [0.120144182, -0.109708909, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        rear_left_wheel_link:
+          xyz: [-0.120144162, 0.109708920, 0.001561096]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        rear_right_wheel_link:
+          xyz: [-0.120144203, -0.109708929, 0.001561098]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+        zed_left_camera_frame:
+          xyz: [0.145146404, 0.025060562, 0.151679508]
+          quaternion_xyzw: [-0.010001214, 0.999887464, 0.010001213, -0.005001170]
+        zed_right_camera_frame:
+          xyz: [0.145146404, -0.024951134, 0.151679508]
+          quaternion_xyzw: [-0.010001214, 0.999887464, 0.010001213, -0.005001170]
+        zed_imu_link:
+          xyz: [0.145146404, 0.025060562, 0.151679508]
+          quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+    sensor_capabilities:
+      rgb: true
+      depth: true
+      camera_info: true
+      stereo: true
+      imu: true
+      realsense_imu: false
+      lidar: false
+      gnss: true
+      radar: false
+    ros_frames:
+      base_footprint: "base_footprint"
+      base_link: "base_link"
+      chassis: "chassis_link"
+      camera: "zed_left_camera_frame"
+      camera_optical: "zed_left_camera_optical_frame"
+      camera_right: "zed_right_camera_frame"
+      camera_right_optical: "zed_right_camera_optical_frame"
+      imu: "zed_imu_link"
+      lidar: "lidar_link"
+      front_left_wheel: "front_left_wheel_link"
+      front_right_wheel: "front_right_wheel_link"
+      rear_left_wheel: "rear_left_wheel_link"
+      rear_right_wheel: "rear_right_wheel_link"
+
+frame_ids_to_remap: ["odom", "base_link"]
+topics_to_remap:
+  - "/camera_info"
+  - "/depth"
+  - "/drive"
+  - "/imu"
+  - "/odom"
+  - "/point_cloud"
+  - "/rgb"
+
+keyboard_control_settings:
+  max_speed_m_s: 3.0
+  max_steer_rad: 0.8
+  acceleration_m_s2: 6.0
+  deceleration_m_s2: 8.0
+  steering_speed_rad_s: 3.0
+
+follow_camera:
+  distance: 4.5
+  height: 1.5
+  focus_height: 0.8
+
+gnss:
+  enabled: true
+  publish_rate_hz: 10
+  map_origin:
+    latitude: 48.812778
+    longitude: 2.210278
+    altitude: 0.0
+  noise:
+    horizontal_stddev_m: 0.5
+    altitude_stddev_m: 1.0
+
+semantic_segmentation:
+  enabled: false

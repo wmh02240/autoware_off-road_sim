@@ -137,9 +137,9 @@ asset_manifest:
   base_scale: 0.01
 assets:
 - name: Grass
-  density_per_100m2: 1500.0
+  density_per_100m2: 8500.0
   scale_min: 0.10000000149011612
-  scale_max: 1.0
+  scale_max: 0.5
   allowed_masks:
   - mowable_area
   forbidden_masks:
@@ -149,7 +149,7 @@ assets:
   align_to_surface: false
   clearance_m: 0.0
 - name: ForestFloorGrass
-  density_per_100m2: 100.0
+  density_per_100m2: 1000.0
   scale_min: 0.019999999552965164
   scale_max: 0.20000000298023224
   allowed_masks:
@@ -269,4 +269,4 @@ assets:
   forbidden_masks: []
   lidar_visible: true
 output:
-  truth_directory: ../../assets/environments/lawn_generated/offroad_lawn_01/truth
+  truth_directory: ../../../../assets/environments/lawn_generated/offroad_lawn_01/truth

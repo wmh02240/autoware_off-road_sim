@@ -27,6 +27,14 @@ class Stage2ContractTests(unittest.TestCase):
         self.assertNotIn("import omni", source)
         self.assertNotIn("perlin_noise", source)
 
+    def test_extension_uses_events_2_for_stage_close(self):
+        source = (ROOT / "lawn/terrain/generator/extension.py").read_text(encoding="utf-8")
+        self.assertIn("carb.eventdispatcher.get_eventdispatcher().observe_event(", source)
+        self.assertIn("self._context.stage_event_name(omni.usd.StageEventType.CLOSED)", source)
+        self.assertIn("subscription.reset()", source)
+        self.assertNotIn("get_stage_event_stream", source)
+        self.assertNotIn("create_subscription_to_pop", source)
+
     def test_point_instancer_uses_relationship_prototype(self):
         source = (ROOT / "lawn/terrain/generator/usd_writer.py").read_text(encoding="utf-8")
         self.assertIn("GetPrototypesRel().SetTargets", source)
@@ -50,6 +58,15 @@ class Stage2ContractTests(unittest.TestCase):
     def test_ui_resolves_registration_symlink_for_default_config(self):
         source = (ROOT / "lawn/terrain/generator/ui.py").read_text(encoding="utf-8")
         self.assertIn("Path(self._extension_path).resolve()", source)
+        self.assertIn(
+            'extension_path / "config/presets/lawn_generator_stage3_offroad.yaml"',
+            source,
+        )
+        for preset in (
+            "lawn_generator_stage2.yaml",
+            "lawn_generator_stage3_offroad.yaml",
+        ):
+            self.assertTrue((ROOT / "config/presets" / preset).is_file())
 
     def test_ui_uses_supported_terrain_mode_dropdown(self):
         config_source = (ROOT / "lawn/terrain/generator/config.py").read_text(encoding="utf-8")

@@ -482,6 +482,10 @@ def main():
         if _dl_prim.IsValid():
             _stage_now.RemovePrim(_dl_path)
             print(f"[Stage] Removed auto-added defaultLight at {_dl_path}")
+
+    # 生成场景可能未固化灯光。只有组合后的 Stage 完全无灯光时才补充太阳光, 已包含 DomeLight/DistantLight 的 LARIAD 或生成场景保持原样。
+    from tools.scene_lighting import ensure_fallback_lighting
+    ensure_fallback_lighting(_stage_now, env_config if isinstance(env_config, dict) else {})
     
     # 通过底层 C++ Carb 配置无条件强制 PhysX 使用同步模式，
     # 从根本上避免 ROS 2 ActionGraph 节点计算速度时发生竞态冲突。

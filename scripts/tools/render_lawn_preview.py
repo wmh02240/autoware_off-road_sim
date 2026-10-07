@@ -36,6 +36,8 @@ def main() -> int:
         for _ in range(60):
             app.update()
         stage = context.get_stage()
+        from scene_lighting import ensure_fallback_lighting
+        ensure_fallback_lighting(stage)
         camera = UsdGeom.Camera.Define(stage, "/World/LawnPreviewCamera")
         camera.CreateFocalLengthAttr(24.0)
         camera.CreateHorizontalApertureAttr(36.0)

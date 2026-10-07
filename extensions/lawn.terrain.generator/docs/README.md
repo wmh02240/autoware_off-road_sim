@@ -21,7 +21,7 @@ command-line generator uses the same implementation without constructing UI.
 
 ## Stage 3 mower scene contract
 
-`scripts/configs/lawn_generator_stage3_offroad.yaml` is the reference
+`config/presets/lawn_generator_stage3_offroad.yaml` is the reference
 configuration. It demonstrates:
 
 - `flat`, `single_slope`, `rolling_lawn`, `terraced_lawn`, and `heightmap`

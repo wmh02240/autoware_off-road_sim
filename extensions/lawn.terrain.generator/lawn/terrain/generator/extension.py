@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import carb
+import carb.eventdispatcher
 import omni.ext
 import omni.kit.app
 import omni.usd
@@ -29,8 +30,10 @@ class LawnTerrainGeneratorExtension(omni.ext.IExt):
             MenuItemDescription(name=EXTENSION_NAME, onclick_fn=self._window.show)
         ]
         add_menu_items(self._menu_items, "Window")
-        self._stage_subscription = self._context.get_stage_event_stream().create_subscription_to_pop(
-            self._on_stage_event, name=f"{EXTENSION_NAME} stage listener"
+        self._stage_subscription = carb.eventdispatcher.get_eventdispatcher().observe_event(
+            event_name=self._context.stage_event_name(omni.usd.StageEventType.CLOSED),
+            on_event=self._on_stage_closed,
+            observer_name=f"{EXTENSION_NAME}.on_stage_closed",
         )
         missing = [name for name, item in audit_assets(self._asset_root).items() if not item.available]
         carb.log_info(f"[{EXTENSION_NAME}] enabled; asset root: {self._asset_root}")
@@ -41,10 +44,13 @@ class LawnTerrainGeneratorExtension(omni.ext.IExt):
             )
 
     def on_shutdown(self) -> None:
+        subscription = getattr(self, "_stage_subscription", None)
+        if subscription is not None:
+            subscription.reset()
+        self._stage_subscription = None
         if getattr(self, "_menu_items", None):
             remove_menu_items(self._menu_items, "Window")
         self._menu_items = []
-        self._stage_subscription = None
         if getattr(self, "_window", None):
             self._window.destroy()
         self._window = None
@@ -58,7 +64,6 @@ class LawnTerrainGeneratorExtension(omni.ext.IExt):
         root = discover_asset_root(self._extension_path, config_asset_root or str(self._asset_root))
         return GeneratorController(stage, str(root))
 
-    def _on_stage_event(self, event) -> None:
-        if event.type == int(omni.usd.StageEventType.CLOSED) and self._window:
+    def _on_stage_closed(self, _event: carb.eventdispatcher.Event) -> None:
+        if self._window:
             self._window.destroy()
-
